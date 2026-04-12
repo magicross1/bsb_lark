@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "AGENTS.md",
+    "README.md",
+    ".ai/product-brief.md",
+    ".ai/architecture.md",
+    ".ai/decisions.md",
+    ".ai/progress.md",
+    ".ai/style-guide.md"
+  ],
+  "permission": {
+    "skill": {
+      "*": "allow"
+    }
+  }
+}
