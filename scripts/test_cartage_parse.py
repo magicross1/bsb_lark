@@ -17,9 +17,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config.ai import get_ai_client
-from app.modules.operations.cartage.parser import CartageParser
-from app.modules.operations.cartage.schemas import CartageParseResult
+from app.service.llm_service.cartage.parser import CartageParser
+from app.service.llm_service.cartage.schemas import CartageParseResult
 
 
 def print_result(pdf_name: str, result: CartageParseResult, elapsed: float, model: str) -> None:
@@ -40,13 +39,17 @@ def print_result(pdf_name: str, result: CartageParseResult, elapsed: float, mode
     print(f"  {'-'*66}")
     for i, c in enumerate(result.containers, 1):
         print(f"  [{i}] CTN: {c.container_number}")
-        print(f"      Type: {c.container_type or '(none)'} | Weight: {c.container_weight}t | Commodity: {c.commodity or '(none)'}")
+        print(
+            f"      Type: {c.container_type or '(none)'} | "
+            f"Weight: {c.container_weight}t | "
+            f"Commodity: {c.commodity or '(none)'}"
+        )
     if not result.booking_reference and result.raw_response:
         print(f"  Raw (first 500): {result.raw_response[:500]}")
 
 
 def main() -> None:
-    from app.config.settings import settings
+    from app.config.app_settings import settings
 
     if not settings.ZHIPUAI_API_KEY:
         print("Error: ZHIPUAI_API_KEY not set in .env")

@@ -17,9 +17,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config.ai import get_ai_client
-from app.modules.operations.edo.parser import EdoParser
-from app.modules.operations.edo.schemas import EdoParseResult
+from app.service.llm_service.edo.parser import EdoParser
+from app.service.llm_service.edo.schemas import EdoParseResult
 
 
 def print_result(pdf_name: str, result: EdoParseResult, elapsed: float, model: str) -> None:
@@ -39,7 +38,7 @@ def print_result(pdf_name: str, result: EdoParseResult, elapsed: float, model: s
 
 
 def main() -> None:
-    from app.config.settings import settings
+    from app.config.app_settings import settings
 
     if not settings.ZHIPUAI_API_KEY:
         print("Error: ZHIPUAI_API_KEY not set in .env")
