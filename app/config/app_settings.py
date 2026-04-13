@@ -1,7 +1,7 @@
 from pydantic_settings import BaseSettings
 
 
-class Settings(BaseSettings):
+class AppSettings(BaseSettings):
     LARK_APP_ID: str = ""
     LARK_APP_SECRET: str = ""
     LARK_BITABLE_APP_TOKEN: str = ""
@@ -14,4 +14,4 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
-settings = Settings()
+settings = AppSettings()

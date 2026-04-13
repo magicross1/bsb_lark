@@ -4,7 +4,7 @@ from abc import ABC
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.core.base_repository import BaseRepository
+    from app.common.lark_repository import BaseRepository
 
 
 class BaseService(ABC):

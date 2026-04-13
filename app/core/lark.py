@@ -1,7 +1,7 @@
 import lark_oapi as lark
 from lark_oapi.api.bitable.v1 import *
 
-from app.config.settings import settings
+from app.config.app_settings import settings
 
 _client: lark.Client | None = None
 

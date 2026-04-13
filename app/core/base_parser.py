@@ -9,9 +9,8 @@ from typing import Any
 import fitz
 from zhipuai import ZhipuAI
 
-from app.config.ai import get_ai_client
-
-THINKING_MODELS = {"glm-5v-turbo"}
+from app.config.app_settings import settings
+from app.core.llm import get_llm_client, model_requires_thinking
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"}
 PDF_EXTENSIONS = {".pdf"}
@@ -54,10 +53,10 @@ class BaseParser(ABC):
         self,
         client: ZhipuAI | None = None,
         *,
-        model: str = "glm-5v-turbo",
+        model: str | None = None,
     ) -> None:
-        self._client = client or get_ai_client()
-        self._model = model
+        self._client = client or get_llm_client()
+        self._model = model if model is not None else settings.AI_MODEL
 
     def parse(self, source: str | Path) -> Any:
         source = Path(source) if not isinstance(source, Path) else source
@@ -94,10 +93,12 @@ class BaseParser(ABC):
             {"type": "text", "text": self.user_hint},
         ]
         for img_b64 in images:
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{img_b64}"},
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                }
+            )
         return [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": content},
@@ -116,7 +117,7 @@ class BaseParser(ABC):
             "temperature": 0.1,
             "max_tokens": 4096,
         }
-        if self._model in THINKING_MODELS:
+        if model_requires_thinking(self._model):
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": 8192}
         response = self._client.chat.completions.create(**kwargs)
         return response.choices[0].message.content.strip()
@@ -132,5 +133,4 @@ class BaseParser(ABC):
         return self.build_result(raw)
 
     @abstractmethod
-    def build_result(self, raw: str) -> Any:
-        ...
+    def build_result(self, raw: str) -> Any: ...

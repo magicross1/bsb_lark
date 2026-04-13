@@ -97,7 +97,7 @@ bsb_lark/
 创建 FastAPI 应用实例，挂载中间件和自动注册所有业务模块路由。
 
 - 创建 `FastAPI` app，设置标题和版本
-- 添加 `AppMiddleware`（Correlation ID + 错误处理 + 响应计时）
+- 添加 `RequestContextMiddleware`（Correlation ID + 错误处理 + 响应计时）
 - 添加 `CORSMiddleware`（开发环境允许所有跨域）
 - 调用 `register_modules(app)` 自动扫描 `modules/` 下所有子目录，发现 `router.py` 则注册
 - 内置端点：
@@ -205,13 +205,13 @@ class DriverRepository(BaseRepository):
 | `ValidationError` | 422 | 数据校验失败 |
 | `LarkApiError` | Lark API 返回的错误码 | Lark API 调用失败 |
 
-所有异常都包含 `code`、`message`、`detail` 三个属性，被 `AppMiddleware` 统一捕获并转为标准响应。
+所有异常都包含 `code`、`message`、`detail` 三个属性，被 `RequestContextMiddleware` 统一捕获并转为标准响应。
 
 ---
 
 ### `app/core/middleware.py` — 请求中间件
 
-`AppMiddleware` 继承 `BaseHTTPMiddleware`，对每个请求：
+`RequestContextMiddleware` 继承 `BaseHTTPMiddleware`，对每个请求：
 
 1. 生成 8 位 `correlation_id`，挂到 `request.state`
 2. 记录请求开始时间
@@ -256,17 +256,18 @@ class DriverRepository(BaseRepository):
 - `TableDef(id, name, fields)` — 表定义，存储 `table_id`、表名和字段字典
 
 **使用方式：**
+
 ```python
-from app.shared.lark_tables import T
+from app.common.lark_tables import T
 
 # 获取表 ID
-T.md_driver.id           # "tblzxHN8llzAf2ge"
+T.md_driver.id  # "tblzxHN8llzAf2ge"
 
 # 获取字段 ID
-T.md_driver.fields["driver_name"].id   # "fldlP3B9Ra"
+T.md_driver.fields["driver_name"].id  # "fldlP3B9Ra"
 
 # 快捷方式：T.<table>.f("<field_key>")
-T.md_driver.f("driver_name")           # "fldlP3B9Ra"
+T.md_driver.f("driver_name")  # "fldlP3B9Ra"
 ```
 
 **已映射的表（32 张主表 + APP_TOKEN）：**

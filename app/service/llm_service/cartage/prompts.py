@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from app.core.base_parser import BaseParser
-from app.modules.operations.cartage.schemas import (
-    CartageContainerEntry,
-    CartageParseResult,
-)
+# ruff: noqa: E501
+# Cartage LLM 提示词（与调用代码分离，便于审阅与版本管理）。
 
 CARTAGE_SYSTEM_PROMPT = """You are a document parser for Australian logistics Cartage / Time Slot Request PDFs.
 
@@ -59,38 +56,6 @@ Return ONLY a JSON object:
   ]
 }"""
 
-
-class CartageParser(BaseParser):
-    system_prompt = CARTAGE_SYSTEM_PROMPT
-    user_hint = "Parse this Cartage / Time Slot Request document. Extract shipment info and ALL containers."
-
-    def build_result(self, raw: str) -> CartageParseResult:
-        from app.core.base_parser import extract_json_from_response
-
-        data = extract_json_from_response(raw)
-        if data is None:
-            return CartageParseResult(raw_response=raw)
-
-        containers: list[CartageContainerEntry] = []
-        for item in data.get("containers", []):
-            cn = item.get("container_number", "")
-            if cn:
-                containers.append(CartageContainerEntry(
-                    container_number=cn,
-                    container_type=item.get("container_type"),
-                    container_weight=item.get("container_weight"),
-                    commodity=item.get("commodity"),
-                ))
-
-        return CartageParseResult(
-            booking_reference=data.get("booking_reference"),
-            direction=data.get("direction"),
-            consingee_name=data.get("consingee_name"),
-            deliver_address=data.get("deliver_address"),
-            deliver_type_raw=data.get("deliver_type_raw"),
-            vessel_name=data.get("vessel_name"),
-            voyage=data.get("voyage"),
-            port_of_discharge=data.get("port_of_discharge"),
-            containers=containers,
-            raw_response=raw,
-        )
+CARTAGE_USER_HINT = (
+    "Parse this Cartage / Time Slot Request document. Extract shipment info and ALL containers."
+)

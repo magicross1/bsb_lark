@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 from app.core.base_parser import BaseParser
-from app.modules.operations.edo.schemas import EdoEntry, EdoParseResult
+from app.service.llm_service.edo.schemas import EdoEntry, EdoParseResult
 
 EDO_SYSTEM_PROMPT = """You are a document parser for Australian logistics EDO (Empty Delivery Order) PDFs.
 
 This PDF may contain:
 - One EDO with one container
-- One EDO with multiple containers (each container has its own PIN, shipping line, and empty park)
+- One EDO with multiple containers
+  (each container has its own PIN, shipping line, and empty park)
 - Multiple separate EDOs in the same PDF
 
 For EACH container found, extract ALL four fields:
 1. container_number: Container number (format: 4 letters + 7 digits, e.g. MSKU1234567)
-2. edo_pin: The EDO PIN for this container (may be labeled as "PIN", "EDO Reference", "Booking Reference", "Release PIN")
-3. shipping_line: The shipping line / carrier (e.g. "COSCO", "MAERSK", "ONE", "HAPAG-LLOYD", "OOCL", "EVERGREEN", "YANG MING", "PIL")
-4. empty_park: The empty container depot / park for this container (may be labeled as "Depot", "Empty Park", "Return Location")
+2. edo_pin: The EDO PIN for this container
+   (may be labeled as "PIN", "EDO Reference", "Booking Reference", "Release PIN")
+3. shipping_line: The shipping line / carrier
+   (e.g. "COSCO", "MAERSK", "ONE", "HAPAG-LLOYD", "OOCL", "EVERGREEN", "YANG MING", "PIL")
+4. empty_park: The empty container depot / park for this container
+   (may be labeled as "Depot", "Empty Park", "Return Location")
 
 IMPORTANT:
 - Return one entry PER container number found
