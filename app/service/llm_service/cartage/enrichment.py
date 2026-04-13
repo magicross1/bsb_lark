@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import re
 from typing import Any
 
 from app.config.cartage_matching import ADDRESS_MATCH_MIN_SCORE, ADDRESS_MATCH_REVIEW_BELOW_SCORE
@@ -10,8 +12,32 @@ from app.service.llm_service.cartage.process_schemas import (
     AddressMatch,
     CartageProcessResult,
     ExportBookingMatch,
+    ImportContainerMatch,
 )
-from app.service.llm_service.cartage.schemas import CartageParseResult, ImportContainerMatch
+from app.service.llm_service.cartage.schemas import CartageParseResult
+
+logger = logging.getLogger(__name__)
+
+_NOISE_WORDS_RE = re.compile(
+    r"\b(?:CO\.?|PTY\.?|LTD\.?|PTD\.?|INC\.?|PTE\.?|LLC\.?|CORP\.?|LIMITED|COMPANY|INTERNATIONAL|TRADING|INDUSTRIES|GROUP|HOLDINGS|AUSTRALIA|AUST|AUS)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_name(name: str) -> str:
+    s = name.upper()
+    s = _NOISE_WORDS_RE.sub("", s)
+    s = re.sub(r"[^A-Z0-9]+", " ", s)
+    return s.strip()
+
+
+def _name_similarity(a: str, b: str) -> float:
+    tokens_a = set(_normalize_name(a).split())
+    tokens_b = set(_normalize_name(b).split())
+    if not tokens_a or not tokens_b:
+        return 0.0
+    overlap = len(tokens_a & tokens_b)
+    return overlap / max(len(tokens_a), len(tokens_b))
 
 
 class CartageEnrichmentService:
@@ -28,6 +54,7 @@ class CartageEnrichmentService:
             address_match, address_needs_review = await self._match_deliver_address(
                 parse_result.deliver_address,
                 parse_result.deliver_type,
+                parse_result.consingee_name,
             )
 
         import_matches = [ImportContainerMatch(**c.model_dump()) for c in parse_result.import_containers]
@@ -52,6 +79,7 @@ class CartageEnrichmentService:
         self,
         address_str: str,
         deliver_type: str | None = None,
+        consingee_name_hint: str | None = None,
     ) -> tuple[AddressMatch | None, bool]:
         parsed = normalize_address(address_str)
         candidates = await self._get_address_candidates(parsed)
@@ -88,7 +116,7 @@ class CartageEnrichmentService:
             deliver_config_id = dc.get("record_id")
             deliver_config = extract_cell_text(dc.get("Deliver Config", dc.get("deliver_config")))
 
-        consingee = await self._find_consingee_by_address(best_record_id)
+        consingee = await self._find_consingee_by_address(best_record_id, consingee_name_hint)
         if consingee:
             consingee_id = consingee.get("record_id")
             consingee_name = extract_cell_text(consingee.get("Name", consingee.get("name")))
@@ -110,8 +138,9 @@ class CartageEnrichmentService:
 
         filtered = all_addresses
         if parsed.postcode:
+            pc_pattern = re.compile(rf"\b{re.escape(parsed.postcode)}\b")
             postcode_candidates = [
-                a for a in all_addresses if parsed.postcode in str(a.get("Address", a.get("address", "")))
+                a for a in all_addresses if pc_pattern.search(str(a.get("Address", a.get("address", ""))))
             ]
             if postcode_candidates:
                 filtered = postcode_candidates
@@ -147,12 +176,39 @@ class CartageEnrichmentService:
 
         return matching
 
-    async def _find_consingee_by_address(self, warehouse_address_id: str) -> dict[str, Any] | None:
+    async def _find_consingee_by_address(
+        self,
+        warehouse_address_id: str,
+        consingee_name_hint: str | None = None,
+    ) -> dict[str, Any] | None:
         all_consingees = await self._cartage.list_consingees_for_matching()
-        for consingee in all_consingees:
+        matches = [
+            c
+            for c in all_consingees
             if link_field_contains_record_id(
-                consingee.get("MD-Warehouse Address", consingee.get("warehouse_address")),
+                c.get("MD-Warehouse Address", c.get("warehouse_address")),
                 warehouse_address_id,
-            ):
-                return consingee
-        return None
+            )
+        ]
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0]
+
+        if not consingee_name_hint:
+            return matches[0]
+
+        scored = [
+            (c, _name_similarity(consingee_name_hint, extract_cell_text(c.get("Name", c.get("name"))) or ""))
+            for c in matches
+        ]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        if scored[0][1] > 0:
+            logger.info(
+                "Consingee name match: %r → %r (score=%.2f, %d candidates)",
+                consingee_name_hint,
+                extract_cell_text(scored[0][0].get("Name", scored[0][0].get("name"))),
+                scored[0][1],
+                len(matches),
+            )
+        return scored[0][0]

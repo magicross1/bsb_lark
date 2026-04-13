@@ -47,7 +47,7 @@ class CartageService:
         cached = c.get(key)
         if cached is None:
             records = await self._warehouse_address_repo.list_all_records(
-                field_names=["Address", "Location", "Detail"],
+                field_names=["Address"],
             )
             c.set(key, records)
             return records

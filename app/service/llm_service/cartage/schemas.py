@@ -2,23 +2,15 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-# Cartage 大模型解析阶段的数据模型（不含主数据匹配后的字段）。
 
-
-class CartageContainerEntry(BaseModel):
+class ImportContainerEntry(BaseModel):
     container_number: str
+    vessel_name: str | None = None
+    voyage: str | None = None
+    base_node: str | None = None
     container_type: str | None = None
-    container_weight: float | None = None
     commodity: str | None = None
-
-
-class ImportContainerMatch(BaseModel):
-    """进口方向集装箱（解析阶段与主数据匹配前）。"""
-
-    container_number: str
-    container_type: str | None = None
     container_weight: float | None = None
-    commodity: str | None = None
 
 
 class ExportBookingEntry(BaseModel):
@@ -34,24 +26,67 @@ class ExportBookingEntry(BaseModel):
 
 
 class CartageDictValues(BaseModel):
-    """解析时可选注入的上下文（例如已知交付类型）。"""
-
-    deliver_type: str | None = None
+    base_nodes: list[str] = Field(
+        default_factory=lambda: [
+            "PORT OF SYDNEY",
+            "PORT OF MELBOURNE",
+            "PORT OF BRISBANE",
+            "PORT OF FREMANTLE",
+            "PORT OF ADELAIDE",
+        ]
+    )
+    container_types: list[str] = Field(
+        default_factory=lambda: [
+            "20GP",
+            "20HC",
+            "20RE",
+            "20OT",
+            "40GP",
+            "40HC",
+            "40RE",
+            "40OT",
+        ]
+    )
+    commodities: list[str] = Field(
+        default_factory=lambda: [
+            "GEN",
+            "HAZ",
+            "REE",
+            "OOG",
+            "EMPTY",
+        ]
+    )
+    shipping_lines: list[str] = Field(
+        default_factory=lambda: [
+            "COSCO",
+            "MAERSK",
+            "ONE",
+            "HAPAG-LLOYD",
+            "OOCL",
+            "EVERGREEN",
+            "YANG MING",
+            "PIL",
+            "MSC",
+            "CMA CGM",
+            "ZIM",
+        ]
+    )
+    deliver_types: list[str] = Field(
+        default_factory=lambda: [
+            "Sideloader(SDL)",
+            "Drop Trailer(DROP)",
+            "Standard Trailer(STD)",
+        ]
+    )
 
 
 class CartageParseResult(BaseModel):
-    """单次 LLM 解析的完整结果。"""
-
     booking_reference: str | None = None
     direction: str | None = None
     consingee_name: str | None = None
     deliver_address: str | None = None
     deliver_type: str | None = None
     deliver_type_raw: str | None = None
-    vessel_name: str | None = None
-    voyage: str | None = None
-    port_of_discharge: str | None = None
-    containers: list[CartageContainerEntry] = Field(default_factory=list)
-    import_containers: list[ImportContainerMatch] = Field(default_factory=list)
+    import_containers: list[ImportContainerEntry] = Field(default_factory=list)
     export_bookings: list[ExportBookingEntry] = Field(default_factory=list)
     raw_response: str | None = None

@@ -104,17 +104,18 @@ def normalize_address(raw: str) -> NormalizedAddress:
         s = s[: postcode_match.start()] + s[postcode_match.end() :]
 
     s = s.strip().rstrip(",").strip()
+    s = re.sub(r"\s{2,}", " ", s)
 
     unit = None
 
     unit_word_match = _UNIT_WORD_RE.match(s)
     if unit_word_match:
-        s = s[unit_word_match.end():]
+        s = s[unit_word_match.end() :]
 
     range_slash_match = _RANGE_SLASH_RE.match(s)
     if range_slash_match:
         unit = range_slash_match.group(1).upper()
-        s = range_slash_match.group(2) + " " + s[range_slash_match.end():]
+        s = range_slash_match.group(2) + " " + s[range_slash_match.end() :]
     else:
         unit_slash_match = _UNIT_SLASH_RE.match(s)
         if unit_slash_match:
@@ -122,12 +123,12 @@ def normalize_address(raw: str) -> NormalizedAddress:
             if candidate:
                 digit_core = re.sub(r"^[a-zA-Z]+", "", candidate)
                 unit = digit_core if digit_core else candidate.upper()
-            s = s[unit_slash_match.end():]
+            s = s[unit_slash_match.end() :]
         elif unit_word_match:
             num_after = re.match(r"^(\d+[A-Za-z]?)[,\s]+", s)
             if num_after:
                 unit = num_after.group(1)
-                s = s[num_after.end():]
+                s = s[num_after.end() :]
 
     s = re.sub(r"^[/\s,]+", "", s)
 
@@ -224,15 +225,21 @@ def address_match_score(parsed: NormalizedAddress, candidate: NormalizedAddress)
 
 
 def _number_ranges_overlap(a: str, b: str) -> bool:
-    def parse_range(s: str) -> set[int]:
+    def parse_range(s: str) -> range:
         s = re.sub(r"[A-Za-z]", "", s)
         if "-" in s:
             parts = s.split("-")
             if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
                 start, end = int(parts[0]), int(parts[1])
-                return set(range(start, end + 1, 2))
+                return range(start, end + 1)
         if s.isdigit():
-            return {int(s)}
-        return set()
+            n = int(s)
+            return range(n, n + 1)
+        return range(0)
 
-    return bool(parse_range(a) & parse_range(b))
+    ra, rb = parse_range(a), parse_range(b)
+    if not ra or not rb:
+        return False
+    latest_start = max(ra.start, rb.start)
+    earliest_end = min(ra.stop, rb.stop)
+    return latest_start < earliest_end

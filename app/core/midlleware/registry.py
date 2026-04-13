@@ -10,7 +10,10 @@ _MODULE_REGISTRY: dict[str, dict[str, Any]] = {}
 
 
 def register_modules(app: FastAPI) -> None:
-    from app import modules
+    try:
+        from app import modules
+    except ImportError:
+        return
 
     for module_info in pkgutil.iter_modules(modules.__path__):
         module_name = module_info.name

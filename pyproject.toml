@@ -31,6 +31,14 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B"]
 
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.File", "fastapi.Form", "fastapi.Query", "fastapi.Depends"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/parser.py" = ["E501"]
+"**/prompts.py" = ["E501"]
+"**/router.py" = ["B008"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

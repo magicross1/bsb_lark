@@ -31,15 +31,17 @@ async def parse_cartage_document(
     if suffix not in allowed:
         return ApiResponse.error(message=f"Unsupported file type: {suffix}. Allowed: {sorted(allowed)}")
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
-
+    tmp_path = None
     try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+
         result = await llm_service.parse_cartage_document(tmp_path, model=model)
         return ApiResponse.ok(data=result.model_dump())
     finally:
-        Path(tmp_path).unlink(missing_ok=True)
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
 
 
 @cartage_router.post("/parse-text")
@@ -61,15 +63,17 @@ async def process_cartage_document(
     if suffix not in allowed:
         return ApiResponse.error(message=f"Unsupported file type: {suffix}. Allowed: {sorted(allowed)}")
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
-
+    tmp_path = None
     try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+
         result = await llm_service.process_cartage_document(tmp_path, model=model)
         return ApiResponse.ok(data=result.model_dump())
     finally:
-        Path(tmp_path).unlink(missing_ok=True)
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
 
 
 @cartage_router.post("/process-text")
@@ -96,16 +100,18 @@ async def parse_edo_document(
     model: str = Form(default="glm-5v-turbo"),
 ):
     suffix = Path(file.filename or "").suffix.lower()
-    allowed = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"}
+    allowed = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".txt", ".text"}
     if suffix not in allowed:
         return ApiResponse.error(message=f"Unsupported file type: {suffix}. Allowed: {sorted(allowed)}")
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
-
+    tmp_path = None
     try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+
         result = await llm_service.parse_edo(tmp_path, model=model)
         return ApiResponse.ok(data=result.model_dump())
     finally:
-        Path(tmp_path).unlink(missing_ok=True)
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)

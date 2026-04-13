@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 def now_sydney() -> datetime:
     from zoneinfo import ZoneInfo
+
     return datetime.now(ZoneInfo("Australia/Sydney"))
 
 

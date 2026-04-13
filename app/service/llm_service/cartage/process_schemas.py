@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from app.service.llm_service.cartage.schemas import ExportBookingEntry, ImportContainerMatch
+from app.service.llm_service.cartage.schemas import ExportBookingEntry, ImportContainerEntry
 
-# 主数据富化之后对外暴露的 Cartage 结果模型（依赖 schemas 中的解析类型）。
+
+class ImportContainerMatch(ImportContainerEntry):
+    pass
 
 
 class ExportBookingMatch(ExportBookingEntry):
-    """出口订舱行（与 :class:`ExportBookingEntry` 字段一致，用于 process 输出）。"""
+    pass
 
 
 class AddressMatch(BaseModel):

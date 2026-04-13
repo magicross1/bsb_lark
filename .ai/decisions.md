@@ -42,5 +42,23 @@
 **备选方案**: 直接 HTTP 请求、lark-cli 封装
 **原因**: 官方维护、Token 自动管理、类型提示
 
+### [2026-04-12] BaseParser 基类统一 AI 解析逻辑
+**背景**: EDO 和 Cartage parser 有大量重复代码（AI 调用、JSON 提取、PDF 转图片），且只支持 PDF 输入
+**决定**: 抽取 BaseParser 基类，子类只需提供 system_prompt + user_hint + build_result()
+**备选方案**: 继续各自独立实现、用 Mixin 拆分
+**原因**: 消除重复代码，统一支持多格式输入（PDF/图片/TXT/字符串），新增文档类型只需写 schemas + prompt
+
+### [2026-04-12] 使用智谱 AI (ZhipuAI) 多模态模型
+**背景**: 需要从物流 PDF 中提取结构化数据
+**决定**: 使用智谱 glm-5v-turbo 多模态模型，PDF→PNG→base64→多模态 API→JSON
+**备选方案**: OCR (Tesseract/PaddleOCR) + 规则提取、OpenAI GPT-4o
+**原因**: 多模态模型直接理解版面布局和上下文，比 OCR+规则更灵活；智谱国内访问快、价格低；thinking 模式提高准确率
+
+### [2026-04-12] Cartage Import/Export 分离 + CartageDictValues 注入
+**背景**: Cartage 解析需要区分进口柜和出口柜，字段完全不同；字典值（Base Node/Container Type/Commodity/Shipping Line）不应硬编码
+**决定**: ImportContainerEntry 和 ExportBookingEntry 分开；CartageDictValues 作为可注入参数，默认值硬编码，service 层从 Bitable 拉取覆盖
+**备选方案**: 统一 ContainerEntry 用 Optional 字段、字典值全硬编码
+**原因**: Import/Export 字段集本质不同（出口无 container_number 有 release_qty/shipping_line），强类型更安全；字典值注入解耦了 parser 和 Bitable
+
 ---
-*最后更新: 2026-04-10*
+*最后更新: 2026-04-12*

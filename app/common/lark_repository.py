@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from abc import ABC
 
 import lark_oapi as lark
@@ -18,6 +19,7 @@ class LarkRepository(ABC):
     @property
     def app_token(self) -> str:
         from app.config.app_settings import settings
+
         return settings.LARK_BITABLE_APP_TOKEN
 
     def _record_to_dict(self, r: AppTableRecord) -> dict[str, Any]:
@@ -35,10 +37,7 @@ class LarkRepository(ABC):
         field_names: list[str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         builder = (
-            ListAppTableRecordRequest.builder()
-            .app_token(self.app_token)
-            .table_id(self.table_id)
-            .page_size(page_size)
+            ListAppTableRecordRequest.builder().app_token(self.app_token).table_id(self.table_id).page_size(page_size)
         )
         if page_token:
             builder.page_token(page_token)
@@ -47,7 +46,7 @@ class LarkRepository(ABC):
         if sort_expr:
             builder.sort(sort_expr)
         if field_names:
-            builder.field_names(str(field_names))
+            builder.field_names(json.dumps(field_names))
 
         resp = await self._client.bitable.v1.app_table_record.alist(
             builder.build(),
@@ -155,10 +154,7 @@ class LarkRepository(ABC):
         return self._record_to_dict(resp.data.record)
 
     async def batch_update_records(self, updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        records = [
-            AppTableRecord.builder().record_id(u["record_id"]).fields(u["fields"]).build()
-            for u in updates
-        ]
+        records = [AppTableRecord.builder().record_id(u["record_id"]).fields(u["fields"]).build() for u in updates]
         resp = await self._client.bitable.v1.app_table_record.abatch_update(
             BatchUpdateAppTableRecordRequest.builder()
             .app_token(self.app_token)
@@ -330,10 +326,7 @@ class LarkRepository(ABC):
 
     async def list_fields(self) -> list[dict[str, Any]]:
         resp = await self._client.bitable.v1.app_table_field.alist(
-            ListAppTableFieldRequest.builder()
-            .app_token(self.app_token)
-            .table_id(self.table_id)
-            .build(),
+            ListAppTableFieldRequest.builder().app_token(self.app_token).table_id(self.table_id).build(),
             lark.BaseRequest.builder().build(),
         )
 

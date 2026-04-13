@@ -19,11 +19,13 @@
 app/
   main.py                  # FastAPI entry + auto module registration
   config/
-    settings.py            # Pydantic Settings (env vars)
+    settings.py            # Pydantic Settings (env vars + ZHIPUAI_API_KEY, AI_MODEL)
     lark.py                # Lark client singleton
+    ai.py                  # ZhipuAI client singleton
   core/
     base_repository.py     # Generic Bitable CRUD
     base_service.py        # Service base class
+    base_parser.py         # Base AI parser (PDF/image/text → AI → JSON), supports multi-format input
     response.py            # Unified response {code, data, message}
     exceptions.py          # AppError, NotFoundError, LarkApiError
     middleware.py           # Correlation ID + error handling
@@ -32,16 +34,32 @@ app/
     lark_tables.py         # 37 Bitable table/field ID mappings
     enums.py               # Depot, ContainerType, DeliverType
     utils.py               # Date/time helpers (Sydney timezone)
+    address.py             # NormalizedAddress, normalize_address(), address_match_score()
   modules/                 # Business modules (auto-registered)
-    master_data/           # MD-* tables
+    master_data/           # MD-* tables (9 repos + WarehouseDeliverConfigRepository)
     pricing/               # MD-Price-* + fee calculators
-    operations/            # Op-* + spider strategies
+    operations/            # Op-* tables + AI parsers
+      edo/                 # EDO (Empty Delivery Order) AI parser
+        schemas.py         # EdoEntry + EdoParseResult
+        prompts.py         # EDO_SYSTEM_PROMPT, EDO_USER_HINT
+        parser.py          # EdoParser (inherits BaseParser)
+        router.py          # POST /edo/parse
+      cartage/             # Cartage / Time Slot Request AI parser
+        schemas.py         # ImportContainerEntry, ExportBookingEntry, CartageParseResult, CartageDictValues, AddressMatch, CartageProcessResult
+        prompts.py         # CARTAGE_USER_HINT, build_cartage_system_prompt()
+        parser.py          # CartageParser (inherits BaseParser)
+        service.py         # CartageService (parse → match → enrich)
+        router.py          # POST /cartage/parse, /process, /clear-cache
     email/                 # Email automation
     sync/                  # Cross-table data sync
 ```
 
 ## Key Patterns
 - Service Layer Pattern: controllers → services → Lark SDK
+- BaseParser Pattern: AI 文档解析基类，子类只需提供 prompt + build_result()，统一支持 PDF/图片/TXT/字符串输入
+- CartageDictValues Pattern: 字典值外部注入到 prompt，默认值硬编码，后续由 service 从 Bitable 拉取覆盖，AI 输出直接匹配字典值减少后处理
+- Address Match Pattern: normalize_address → 粗筛(postcode/street) → address_match_score 评分 → 最佳匹配，阈值 MATCH_THRESHOLD=0.6, REVIEW_THRESHOLD=0.8
+- CartageService Pattern: 三级缓存(addresses/deliver_configs/consingees)，避免重复 Bitable API 调用
 - Centralized Lark Client: 所有 Lark API 调用通过统一模块
 - Token Auto-refresh: tenant_access_token 自动刷新
 - Fail Fast: 环境变量启动时校验
@@ -126,7 +144,8 @@ app/
 | LARK_APP_SECRET | Lark 应用 Secret | Yes |
 | LARK_BITABLE_APP_TOKEN | 多维表格 App Token | Yes |
 | PORT | 服务端口 | No (default: 3000) |
-| NODE_ENV | 运行环境 | No (default: development) |
+| ZHIPUAI_API_KEY | 智谱 AI API Key | Yes |
+| AI_MODEL | 智谱模型名 | No (default: glm-5v-turbo) |
 
 ---
-*最后更新: 2026-04-10*
+*最后更新: 2026-04-12*
