@@ -76,6 +76,7 @@ def build_cartage_parse_result(
                         container_type=_validate_choice(item.get("container_type"), dv.container_types),
                         commodity=_validate_choice(item.get("commodity"), dv.commodities),
                         container_weight=item.get("container_weight"),
+                        shipping_line=_validate_choice(item.get("shipping_line"), dv.shipping_lines),
                     )
                 )
 

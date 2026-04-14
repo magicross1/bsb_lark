@@ -31,6 +31,7 @@ app/
     enums.py               # Depot, ContainerType, DeliverType, etc.
   entity/
     address.py             # NormalizedAddress, normalize_address(), address_match_score()
+    relation.py            # RelationResolver, RelationHop (声明式跨表关联解析)
     schemas.py             # Master data output schemas
   cache/
     factory.py             # CacheFactory (in-memory cache)

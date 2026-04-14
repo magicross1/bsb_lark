@@ -45,11 +45,17 @@ app/
         parser.py          # EdoParser (inherits BaseParser)
         router.py          # POST /edo/parse
       cartage/             # Cartage / Time Slot Request AI parser
-        schemas.py         # ImportContainerEntry, ExportBookingEntry, CartageParseResult, CartageDictValues, AddressMatch, CartageProcessResult
+        schemas.py         # ImportContainerEntry, ExportBookingEntry, CartageParseResult, CartageDictValues
         prompts.py         # CARTAGE_USER_HINT, build_cartage_system_prompt()
         parser.py          # CartageParser (inherits BaseParser)
-        service.py         # CartageService (parse → match → enrich)
-        router.py          # POST /cartage/parse, /process, /clear-cache
+        result_builder.py  # build_cartage_parse_result()
+        enrichment.py      # CartageEnrichmentService (parse result → address/consingee matching)
+        process_schemas.py # CartageProcessResult, AddressMatch, ImportContainerMatch, ExportBookingMatch
+        export_bookings.py # expand_export_bookings()
+        writeback.py       # CartageWritebackService (enriched result → Bitable write)
+        writeback_config.py # WritebackFieldRule, OP_IMPORT_RULES — config-driven writeback with filter_expr + NestedLink
+        writeback_schemas.py # CartageWritebackResult, WritebackRecordRef
+        router.py          # POST /cartage/parse, /process, /writeback, /clear-cache
     email/                 # Email automation
     sync/                  # Cross-table data sync
 ```
@@ -60,6 +66,8 @@ app/
 - CartageDictValues Pattern: 字典值外部注入到 prompt，默认值硬编码，后续由 service 从 Bitable 拉取覆盖，AI 输出直接匹配字典值减少后处理
 - Address Match Pattern: normalize_address → 粗筛(postcode/street) → address_match_score 评分 → 最佳匹配，阈值 MATCH_THRESHOLD=0.6, REVIEW_THRESHOLD=0.8
 - CartageService Pattern: 三级缓存(addresses/deliver_configs/consingees)，避免重复 Bitable API 调用
+- CartageWriteback Pattern: enriched result → 先写 Op-Cartage → 再写 Op-Import/Op-Export（带 Op-Cartage link），link field 写入格式 `["recXXX"]`
+- LinkFieldResolver + filter_expr Pattern: 支持 `filter_expr` 模板渲染（从 context 注入变量），生成 `AND(主条件, 渲染后条件)` 复合过滤，用于 Vessel Name + Voyage 等复合唯一键查找
 - Centralized Lark Client: 所有 Lark API 调用通过统一模块
 - Token Auto-refresh: tenant_access_token 自动刷新
 - Fail Fast: 环境变量启动时校验

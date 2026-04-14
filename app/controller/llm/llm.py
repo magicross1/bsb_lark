@@ -91,6 +91,48 @@ async def clear_cartage_cache():
     return ApiResponse.ok(message="cache cleared")
 
 
+@cartage_router.post("/writeback")
+async def writeback_cartage_document(
+    file: UploadFile = File(..., description="PDF, image, or TXT file"),  # noqa: B008
+    model: str = Form(default="glm-5v-turbo"),
+):
+    suffix = Path(file.filename or "").suffix.lower()
+    allowed = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".txt", ".text"}
+    if suffix not in allowed:
+        return ApiResponse.error(message=f"Unsupported file type: {suffix}. Allowed: {sorted(allowed)}")
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+
+        enriched, writeback = await llm_service.process_and_writeback_cartage_document(tmp_path, model=model)
+        return ApiResponse.ok(
+            data={
+                "process": enriched.model_dump(),
+                "writeback": writeback.model_dump(),
+            }
+        )
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
+@cartage_router.post("/writeback-text")
+async def writeback_cartage_text(
+    text: str = Form(..., description="Cartage document text content"),
+    model: str = Form(default="glm-5v-turbo"),
+):
+    enriched, writeback = await llm_service.process_and_writeback_cartage_text(text, model=model)
+    return ApiResponse.ok(
+        data={
+            "process": enriched.model_dump(),
+            "writeback": writeback.model_dump(),
+        }
+    )
+
+
 # ── EDO ─────────────────────────────────────────────────────
 
 

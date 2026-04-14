@@ -17,7 +17,15 @@ def extract_cell_text(field: object) -> str | None:
                 if text:
                     parts.append(str(text))
         return ", ".join(parts) if parts else None
-    return str(field)
+    if isinstance(field, dict):
+        if "link_record_ids" in field or "record_ids" in field:
+            return None
+        if "value" in field:
+            return extract_cell_text(field["value"])
+        text = field.get("text")
+        if text:
+            return str(text)
+    return None
 
 
 def link_field_contains_record_id(link_field: object, record_id: str) -> bool:
@@ -31,9 +39,42 @@ def link_field_contains_record_id(link_field: object, record_id: str) -> bool:
             if isinstance(item, str) and item == record_id:
                 return True
             if isinstance(item, dict):
-                ids = item.get("record_ids", [])
-                if record_id in ids:
-                    return True
+                for key in ("record_ids", "link_record_ids"):
+                    ids = item.get(key, [])
+                    if record_id in ids:
+                        return True
                 if str(item.get("text", "")).endswith(record_id):
                     return True
+    if isinstance(link_field, dict):
+        for key in ("record_ids", "link_record_ids"):
+            ids = link_field.get(key, [])
+            if record_id in ids:
+                return True
     return False
+
+
+def extract_link_record_ids(link_field: object) -> list[str]:
+    """从关联类字段中提取所有 record_id。"""
+    if link_field is None:
+        return []
+    if isinstance(link_field, str):
+        return [link_field]
+    if isinstance(link_field, list):
+        result: list[str] = []
+        for item in link_field:
+            if isinstance(item, str):
+                result.append(item)
+            elif isinstance(item, dict):
+                for key in ("record_ids", "link_record_ids"):
+                    ids = item.get(key, [])
+                    if isinstance(ids, list):
+                        result.extend(str(i) for i in ids)
+        return result
+    if isinstance(link_field, dict):
+        result = []
+        for key in ("record_ids", "link_record_ids"):
+            ids = link_field.get(key, [])
+            if isinstance(ids, list):
+                result.extend(str(i) for i in ids)
+        return result
+    return []

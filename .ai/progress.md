@@ -175,6 +175,130 @@
 - `llm_service = LLMService()` 模块级单例 vs 依赖注入 — 目前可用但不够干净
 - Cartage prompt 目前是简化版（无 Import/Export 分离、无字典值注入）— 需讨论是否升级
 
+### [2026-04-14] Bitable Writeback — Cartage 解析结果写回
+**做了什么**:
+- 新增 `app/repository/import_.py` — ImportRepository (Op-Import 表)
+- 新增 `app/repository/export_.py` — ExportRepository (Op-Export 表)
+- 新增 `app/service/llm_service/cartage/writeback_schemas.py` — CartageWritebackResult, WritebackRecordRef
+- 新增 `app/service/llm_service/cartage/writeback.py` — CartageWritebackService:
+  - `_write_cartage()` — 创建 Op-Cartage 记录 (Booking Reference, Consingnee Name, Deliver Config link)
+  - `_write_imports()` — 批量创建 Op-Import 记录 (Container Number, Type, Weight, Commodity, Vessel, Voyage, Op-Cartage link)
+  - `_write_exports()` — 批量创建 Op-Export 记录 (Booking Reference, Release Qty, Container Type, Commodity, Shipping Line, Op-Cartage link)，自动 expand_export_bookings
+  - `_link()` 辅助函数 — 生成 Bitable link field 格式 `[{"record_ids": ["recXXX"]}]`
+- LLMService 新增 `process_and_writeback_cartage_document/text` 方法
+- Controller 新增 `POST /cartage/writeback` 和 `POST /cartage/writeback-text` 端点
+
+**下一步**:
+- 集成测试: 完整 writeback 流程验证
+- Lark webhook 事件监听: Cartage Advise 附件上传自动触发解析+写回
+- Refactor enrichment.py 使用 RelationResolver
+
+### [2026-04-14] Vessel Schedule 复合查询 + Container Type 写回修复
+**做了什么**:
+- **LinkFieldResolver 支持 filter_expr** — `LinkLookup.filter_expr` 之前声明但未使用，现已实现模板渲染 + AND 组合过滤
+  - `resolve()` 新增 `_find_existing()` 方法：当 `filter_expr` 存在时，构建 `AND(主搜索条件, 渲染后的filter_expr)` 复合过滤
+  - 上下文变量通过 `format_map()` 注入到 filter_expr 模板
+- **Vessel Schedule 查询升级为 Vessel Name + Voyage** — writeback_config.py 新增 `filter_expr='CurrentValue.[Voyage]="{voyage}"'`
+  - 同一船名不同航次不再误匹配
+  - 创建新 Vessel Schedule 记录时正确填充 Voyage + Base Node
+- **修复 container_type 未写入** — writeback.py 的 source dict 缺少 `container_type` 键，导致 Container Type 字段始终为空
+- **验证 Commodity/Container Type 字段类型** — Bitable 确认 Container Type (type=3) 和 Commodity (type=3) 均为 select 字段，可正常写入。已验证 Commodity="GEN" 成功持久化
+- 清理 writeback.py 和 writeback_config.py 中未使用的 import (LinkLookup, OP_CARTAGE_IMPORT_RULES, field, Any)
+
+**测试验证**:
+- `COSCO ROTTERDAM / 209S` → 正确找到已有记录 `recvgKaLB8Xb0E`
+- `COSCO ROTTERDAM / 999N` → 正确创建新记录并链接 Base Node (测试后已删除)
+
+### [2026-04-14] Import 流程修正 — Base Node 三字段联合查询 + 去除 Shipping Line + Container Type 修复
+**做了什么**:
+- **Vessel Schedule 查询升级为 Vessel Name + Voyage + Base Node 三字段** — filter_expr 改为 `AND(CurrentValue.[Voyage]="{voyage}", CurrentValue.[Base Node]="{base_node}")`
+  - 发现 Bitable 支持通过关联字段的显示文本过滤 (如 `CurrentValue.[Base Node]="PORT OF MELBOURNE"`)
+  - 同一船名+航次+不同港口现在正确区分
+  - 创建新 Vessel Schedule 记录时 Base Node 正确关联到 MD-Base Node
+- **移除 Shipping Line from Op-Import 写回** — Shipping Line 属于 EDO 流程，Cartage Import 不应录入
+  - 从 `OP_IMPORT_RULES` 删除 Shipping Line 规则
+  - 从 writeback.py source dict 删除 `shipping_line` 键
+  - 从 Import prompt 删除 shipping_line 提取要求 (Export prompt 保留)
+- **修复 Container Type 写入** — source dict 缺少 `container_type` 键导致始终为空 (上一轮已修复，本轮验证通过)
+- **更新 CartageDictValues** — commodity 选项从 5 个扩展到 9 个，与 Bitable 实际选项完全对齐: HAZ, GEN, GENL, REEF, OOG, BBLK, MT, EMPTY, MTHZ (修复 "REE"→"REEF" 不匹配问题)
+- **新增文档** `.ai/cartage-writeback-guide.md` — 完整技术文档供同事参考改良
+
+**E2E 验证** (使用 DELIVERY DOCKET...1219.pdf):
+- Op-Cartage: Booking Reference ✅, Consingnee Name ✅, Deliver Config ✅, Import Booking ✅
+- Op-Import: Container Number ✅, Container Type=40HC ✅, Commodity=GEN ✅, Container Weight ✅, FULL Vessel Name ✅
+- Op-Vessel Schedule (新建): Vessel Name ✅, Voyage ✅, Base Node=PORT OF MELBOURNE ✅
+
 ---
 
-*最后更新: 2026-04-13*
+### [2026-04-14] 多柜号支持 — Import Booking 追加 + 重复跳过 + Resolver 缓存
+**做了什么**:
+- **Import Booking 追加而非覆盖** — `_link_import_to_cartage` 改为 `_link_imports_to_cartage`
+  - 先读取 Op-Cartage 现有 Import Booking → 合并新 record_ids → 去重 → 写回
+  - 使用 `extract_link_record_ids` 统一处理 Bitable link 字段的不同读取格式
+- **重复 Container Number 跳过** — 不再 raise DuplicateContainerError 中止全部
+  - 遍历所有柜号，检查重复，跳过重复的，只录入不重复的
+  - 全部重复时不创建 Op-Cartage
+  - 新增 `SkippedContainer` schema，记录被跳过的柜号、原因和已有 record_id
+  - 移除 `DuplicateContainerError` 类
+- **LinkFieldResolver 内存缓存** — 同一请求内，相同 lookup+value+filter_expr 只查一次 Bitable
+  - 多柜共享同一 Vessel Schedule 时，第 2-5 个柜直接命中缓存
+  - 缓存 key 包含 target_table_id + search_field + value + rendered filter_expr
+- **Export Booking 追加** — 同 Import Booking，改为 `_link_exports_to_cartage` 批量追加
+
+**E2E 验证** (使用 SHEXP26030118 TLX.PDF — 5个进口柜):
+- 5 个 Op-Import 全部创建: Container Number ✅, Container Type=20GP ✅, Commodity=GEN ✅, Weight ✅
+- Import Booking: 5 条关联全部追加 ✅
+- Vessel Schedule: 只创建 1 条 (FENG NIAN 361/276S, Base Node=PORT OF SYDNEY) — 缓存命中 ✅
+- 重复提交: 5 个柜全部跳过，不创建空 Cartage ✅
+
+---
+
+### [2026-04-14] 1-to-1 Cartage-Import 重构 + is_direct_link 修复
+**做了什么**:
+- **1-to-1 关系重构** — 每个柜号创建独立的 Op-Cartage + Op-Import，不再共享一个 Op-Cartage
+  - `writeback.py` 完全重写: `_writeback_import()` 改为逐柜循环，每个柜号独立创建 Op-Cartage 再创建 Op-Import
+  - `writeback_schemas.py`: `cartage: WritebackRecordRef | None` → `cartage_refs: list[WritebackRecordRef]`
+  - 移除 `_link_imports_to_cartage` / `_link_exports_to_cartage` (1-to-1 时由双向关联自动回填)
+  - Export 流程同样重构为 1-to-1
+- **is_direct_link 修复** — Op-Cartage 的 Consingnee Name 和 Deliver Config 写入失败
+  - 根因: 旧配置用 `LinkLookup` 搜索 enrichment 已解析出的 record_id (如 `recvfDQTsLGCuR`)，把 record_id 当 Name 搜索，自然找不到
+  - 修复: `WritebackFieldRule` 新增 `is_direct_link: bool = False` 字段
+  - Consingnee Name 和 Deliver Config 改为 `is_direct_link=True`，直接写入 `[record_id]`
+  - `_build_fields()` 新增 `is_direct_link` 分支，优先于 `link_lookup` 处理
+- **测试脚本修复** — `scripts/test_auto_order_entry.py` 适配 `cartage_refs` 字段
+
+**E2E 验证** (使用 SHEXP26030118 TLX.PDF — 5个进口柜):
+- 5 个 Op-Cartage 全部创建 ✅, 每个 Booking Reference=SHEXP26030118
+- 5 个 Op-Import 全部创建 ✅, 每个 Container Number/Type/Commodity/Weight 正确
+- 每个 Op-Cartage 有且仅有 1 条 Import Booking (1-to-1) ✅
+- Consingnee Name = HF IMPERIAL INTERNATIONAL ✅ (之前为空)
+- Deliver Config = UNIT 3/222 Woodpark Rd, Smithfield NSW 2164 (STD) ✅ (之前为空)
+- Vessel Schedule: 缓存命中，5 个 Op-Import 共享同一条 ✅
+
+---
+
+### [2026-04-14] Export 出口柜写回实现
+**做了什么**:
+- **新增 OP_CARTAGE_EXPORT_RULES** — Op-Cartage (Export) 写入配置: Booking Reference + Consingnee Name (direct_link) + Deliver Config (direct_link)，Consingee/Deliver Config 非必填（出口柜可能无地址匹配）
+- **新增 OP_EXPORT_RULES** — Op-Export 写入配置:
+  - Booking Reference (必填)
+  - Container Number (可选，展开后可能无)
+  - Release Qty (数字)
+  - FULL Vessel Name (关联 Op-Vessel Schedule，同 Import 的 Vessel Name+Voyage+Base Node 三字段查找)
+  - Container Type (单选)
+  - Commodity (单选)
+- **重写 `_writeback_export()`** — 与 Import 完全对齐:
+  - 先 expand_export_bookings (release_qty>1 展开为多条)
+  - 重复检查: 按 Container Number 查 Op-Export，有则跳过
+  - 1-to-1: 每条展开后的 booking 独立创建 Op-Cartage + Op-Export
+  - 使用 `_build_fields(OP_CARTAGE_EXPORT_RULES)` 和 `_build_fields(OP_EXPORT_RULES)` 配置驱动
+- **expand_export_bookings 逻辑** — release_qty>1 时，Booking Reference 保持原值不变，Container Number 加 `-序号` 后缀 (如 RSG20811-1, RSG20811-2)，release_qty 改为 1
+
+**E2E 验证** (使用 03288201...pdf — 出口柜 RSG20811, release_qty=2):
+- 2 个 Op-Cartage 全部创建 ✅: BR=RSG20811 (不变), Consingnee=Ocean & Air Cargo Services ✅, Deliver Config=28 Jones Rd Brooklyn (SDL) ✅
+- 2 个 Op-Export 全部创建 ✅: BR=RSG20811, CN=RSG20811-1/RSG20811-2, Release Qty=1, Container Type=20GP, Commodity=EMPTY ✅
+- 1-to-1: 每个 Cartage 恰好 1 条 Export Booking ✅
+
+---
+
+*最后更新: 2026-04-14*

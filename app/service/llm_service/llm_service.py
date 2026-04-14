@@ -8,6 +8,8 @@ from app.service.llm_service.cartage.cartage_llm import CartageLlmService
 from app.service.llm_service.cartage.enrichment import CartageEnrichmentService
 from app.service.llm_service.cartage.process_schemas import CartageProcessResult
 from app.service.llm_service.cartage.schemas import CartageDictValues, CartageParseResult
+from app.service.llm_service.cartage.writeback import CartageWritebackService
+from app.service.llm_service.cartage.writeback_schemas import CartageWritebackResult
 from app.service.llm_service.edo.edo_llm import EdoLlmService
 from app.service.llm_service.edo.schemas import EdoParseResult
 
@@ -21,11 +23,13 @@ class LLMService:
         cartage: CartageService | None = None,
         cartage_llm: CartageLlmService | None = None,
         cartage_enrichment: CartageEnrichmentService | None = None,
+        cartage_writeback: CartageWritebackService | None = None,
         edo_llm: EdoLlmService | None = None,
     ) -> None:
         self._cartage = cartage or CartageService(cache_factory=cache_factory or CacheFactory())
         self._cartage_llm = cartage_llm or CartageLlmService()
         self._cartage_enrichment = cartage_enrichment or CartageEnrichmentService(self._cartage)
+        self._cartage_writeback = cartage_writeback or CartageWritebackService()
         self._edo = edo_llm or EdoLlmService()
 
     async def parse_edo(self, source: str | Path, *, model: str | None = None) -> EdoParseResult:
@@ -71,6 +75,30 @@ class LLMService:
     ) -> CartageProcessResult:
         parsed = await self._cartage_llm.parse_text(text, model=model, dict_values=dict_values)
         return await self._cartage_enrichment.enrich(parsed)
+
+    async def process_and_writeback_cartage_document(
+        self,
+        source: str | Path,
+        *,
+        model: str = "glm-5v-turbo",
+        dict_values: CartageDictValues | None = None,
+    ) -> tuple[CartageProcessResult, CartageWritebackResult]:
+        parsed = await self._cartage_llm.parse_document(source, model=model, dict_values=dict_values)
+        enriched = await self._cartage_enrichment.enrich(parsed)
+        writeback = await self._cartage_writeback.writeback(enriched)
+        return enriched, writeback
+
+    async def process_and_writeback_cartage_text(
+        self,
+        text: str,
+        *,
+        model: str = "glm-5v-turbo",
+        dict_values: CartageDictValues | None = None,
+    ) -> tuple[CartageProcessResult, CartageWritebackResult]:
+        parsed = await self._cartage_llm.parse_text(text, model=model, dict_values=dict_values)
+        enriched = await self._cartage_enrichment.enrich(parsed)
+        writeback = await self._cartage_writeback.writeback(enriched)
+        return enriched, writeback
 
     def clear_cartage_cache(self) -> None:
         self._cartage.clear_cache()

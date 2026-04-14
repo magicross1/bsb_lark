@@ -11,6 +11,7 @@ class ImportContainerEntry(BaseModel):
     container_type: str | None = None
     commodity: str | None = None
     container_weight: float | None = None
+    shipping_line: str | None = None
 
 
 class ExportBookingEntry(BaseModel):
@@ -49,11 +50,15 @@ class CartageDictValues(BaseModel):
     )
     commodities: list[str] = Field(
         default_factory=lambda: [
-            "GEN",
             "HAZ",
-            "REE",
+            "GEN",
+            "GENL",
+            "REEF",
             "OOG",
+            "BBLK",
+            "MT",
             "EMPTY",
+            "MTHZ",
         ]
     )
     shipping_lines: list[str] = Field(

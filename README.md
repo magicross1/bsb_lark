@@ -10,6 +10,7 @@ BSB Transport Australia - 基于 Lark Bitable 的物流运营后端
 | 框架 | FastAPI | 异步、自动 OpenAPI 文档、类型校验 |
 | 数据源 | Lark Bitable (37 表) | 替代原 Google Sheets |
 | Lark SDK | lark-oapi | 官方 Python SDK |
+| AI | 智谱 ZhipuAI (glm-5v-turbo) | 多模态 PDF 解析 |
 | 数据校验 | Pydantic v2 | FastAPI 原生集成 |
 | 包管理 | uv | 比 pip 快 10-100x |
 | 部署 | Docker + Docker Compose | |
@@ -25,7 +26,7 @@ uv sync
 
 # 3. 配置环境变量
 cp .env.example .env
-# 编辑 .env 填入 LARK_APP_ID 和 LARK_APP_SECRET
+# 编辑 .env 填入 LARK_APP_ID, LARK_APP_SECRET, ZHIPUAI_API_KEY
 
 # 4. 启动开发服务器
 uv run uvicorn app.main:app --reload --port 3000
@@ -36,401 +37,182 @@ uv run uvicorn app.main:app --reload --port 3000
 # 健康检查: http://localhost:3000/health
 ```
 
-## Python 解释器配置
-
-项目虚拟环境路径：`.venv/Scripts/python.exe`
-
-在 VS Code / PyCharm 中选择此路径作为项目解释器。
-
 ## 项目结构
 
 ```
-bsb_lark/
-├── app/
-│   ├── __init__.py
-│   ├── main.py                    # FastAPI 入口
-│   ├── config/
-│   │   ├── __init__.py
-│   │   ├── settings.py            # 环境变量配置
-│   │   └── lark.py                # Lark 客户端
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── base_repository.py     # Bitable CRUD 基类
-│   │   ├── base_service.py        # Service 基类
-│   │   ├── response.py            # 统一响应格式
-│   │   ├── exceptions.py          # 自定义异常
-│   │   ├── middleware.py          # 请求中间件
-│   │   └── registry.py            # 模块自动注册
-│   ├── shared/
-│   │   ├── __init__.py
-│   │   ├── lark_tables.py         # Bitable 表/字段 ID 映射
-│   │   ├── enums.py               # 业务枚举
-│   │   └── utils.py               # 工具函数
-│   └── modules/
-│       ├── __init__.py
-│       ├── master_data/           # 主数据模块 (已实现)
-│       │   ├── __init__.py
-│       │   ├── router.py
-│       │   ├── service.py
-│       │   ├── repository.py
-│       │   └── schemas.py
-│       ├── pricing/               # 价格/费用模块 (待实现)
-│       ├── operations/            # 运营/集装箱模块 (待实现)
-│       ├── email/                 # 邮件自动化模块 (待实现)
-│       └── sync/                  # 数据同步模块 (待实现)
-├── tests/
-│   └── __init__.py
-├── .ai/                           # AI 知识文档 (自动加载)
-├── .env.example
-├── .gitignore
-├── Dockerfile
-├── docker-compose.yml
-├── pyproject.toml
-├── AGENTS.md                      # AI 代理规则
-└── opencode.json                  # OpenCode 配置
+app/
+  main.py                  # FastAPI 入口 + 中间件 + 路由挂载
+  config/
+    app_settings.py        # Pydantic Settings (环境变量)
+    lark.py                # Lark 客户端单例
+    cartage_matching.py    # 地址匹配阈值常量
+  core/
+    base_parser.py         # AI 解析基类 (PDF/图片/TXT → AI → JSON)
+    base_service.py        # Service 基类
+    lark.py                # Lark 客户端 re-export
+    llm.py                 # 智谱 AI 客户端 + 模型辅助函数
+    lark_bitable_value.py  # Bitable 值提取工具函数
+    utils.py               # 日期时间工具 (悉尼时区)
+    midlleware/
+      registry.py          # 模块自动注册
+  common/
+    lark_tables.py         # 37 表 ID/字段 ID 映射
+    lark_repository.py     # Bitable CRUD 基类
+    response.py            # 统一响应 {code, data, message}
+    exceptions.py          # AppError, NotFoundError, LarkApiError
+    enums.py               # Depot, ContainerType, DeliverType
+  entity/
+    address.py             # 地址标准化 + 匹配评分
+    relation.py            # 跨表关联解析 (RelationResolver)
+    link_resolver.py       # 关联字段查找/创建 (LinkFieldResolver)
+  cache/
+    factory.py             # 缓存工厂
+    constants.py           # 缓存 key 定义
+  controller/
+    router.py              # 顶级路由聚合
+    data/                  # 主数据 CRUD 控制器
+    llm/llm.py             # Cartage + EDO AI 控制器
+  service/
+    cartage.py             # Cartage 领域服务 (三级缓存)
+    consingee.py           # Consingee 领域服务
+    warehouse_deliver_config.py  # Deliver Config 领域服务
+    llm_service/
+      llm_service.py       # LLM 应用服务 (facade)
+      cartage/
+        cartage_llm.py     # Cartage LLM 编排
+        parser.py          # CartageParser (继承 BaseParser)
+        prompts.py         # AI 提示词
+        schemas.py         # ImportContainerEntry, ExportBookingEntry, CartageDictValues
+        result_builder.py  # 原始 JSON → CartageParseResult
+        enrichment.py      # 地址/Consingee 匹配
+        process_schemas.py # CartageProcessResult, AddressMatch
+        export_bookings.py # 出口柜 release_qty 展开
+        writeback.py       # CartageWritebackService (写回 Bitable)
+        writeback_config.py # WritebackFieldRule 配置 (声明式)
+        writeback_schemas.py # CartageWritebackResult
+      edo/
+        edo_llm.py         # EDO LLM 编排
+        parser.py          # EdoParser
+        schemas.py         # EdoEntry, EdoParseResult
+        prompts.py         # EDO 提示词
+  repository/
+    cartage.py             # Op-Cartage
+    import_.py             # Op-Import
+    export_.py             # Op-Export
+    warehouse_address.py   # MD-Warehouse Address
+    warehouse_deliver_config.py  # MD-Warehouse Deliver Config
+    consingee.py           # MD-Consingee
+    ...                    # 其他表仓储
 ```
 
-## 各文件详细说明
+## 已实现功能
 
-### `app/main.py` — FastAPI 入口
+### 1. Cartage 自动录入 (核心功能)
 
-创建 FastAPI 应用实例，挂载中间件和自动注册所有业务模块路由。
+从 Cartage Advise 附件 (PDF/图片/TXT) 自动提取数据、匹配主数据、写回 Bitable。
 
-- 创建 `FastAPI` app，设置标题和版本
-- 添加 `RequestContextMiddleware`（Correlation ID + 错误处理 + 响应计时）
-- 添加 `CORSMiddleware`（开发环境允许所有跨域）
-- 调用 `register_modules(app)` 自动扫描 `modules/` 下所有子目录，发现 `router.py` 则注册
-- 内置端点：
-  - `GET /health` — 健康检查，返回 `{"status": "ok", "env": "development"}`
-  - `GET /modules` — 列出所有已注册模块及其路由
-- `__main__` 入口：`uvicorn` 启动，开发模式自动热重载
+**完整流程**: `附件 → AI解析 → 地址匹配 → 写回Bitable`
 
----
+**进口柜 (Import)**:
+- 每个 Container Number 创建 1 个 Op-Cartage + 1 个 Op-Import (1-to-1)
+- 自动匹配: 仓库地址 → Deliver Config + Consingee
+- 自动查找/创建: Vessel Schedule (Vessel Name + Voyage + Base Node 三字段唯一键)
+- 重复 Container Number 自动跳过 (不中止全部)
 
-### `app/config/settings.py` — 环境变量配置
+**出口柜 (Export)**:
+- Release Qty > 1 时自动展开为多条记录 (Booking Ref 不变, Container Number 加 -序号)
+- 例: RSG20811, qty=2 → Container Number = RSG20811-1, RSG20811-2
+- 每个 Container Number 创建 1 个 Op-Cartage + 1 个 Op-Export (1-to-1)
+- Consingee/Deliver Config 非必填 (出口可能无地址匹配)
 
-基于 `pydantic-settings` 的配置类，从 `.env` 文件读取环境变量。
+**写回配置驱动**: 所有 Bitable 字段的写入规则用 `WritebackFieldRule` 声明式配置，而非硬编码逻辑。
 
-| 变量 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `LARK_APP_ID` | str | `""` | Lark 应用 ID |
-| `LARK_APP_SECRET` | str | `""` | Lark 应用 Secret |
-| `LARK_BITABLE_APP_TOKEN` | str | `""` | 多维表格 App Token |
-| `PORT` | int | `3000` | 服务端口 |
-| `ENV` | str | `"development"` | 运行环境 |
-| `LOG_LEVEL` | str | `"info"` | 日志级别 |
+| API 端点 | 方法 | 说明 |
+|----------|------|------|
+| `POST /cartage/parse` | 上传文件 | 解析文档，返回结构化数据 |
+| `POST /cartage/parse-text` | 文本 | 解析文本 |
+| `POST /cartage/process` | 上传文件 | 解析 + 地址匹配 |
+| `POST /cartage/process-text` | 文本 | 解析 + 地址匹配 |
+| `POST /cartage/writeback` | 上传文件 | 完整流程: 解析 + 匹配 + 写回 Bitable |
+| `POST /cartage/writeback-text` | 文本 | 完整流程 |
+| `POST /cartage/clear-cache` | - | 清除缓存 |
 
-启动时自动读取 `.env` 文件，缺少必填变量会在首次使用时抛出异常。
+### 2. EDO 解析
 
----
+从 EDO (Empty Delivery Order) PDF 提取 container_number / edo_pin / shipping_line / empty_park。
 
-### `app/config/lark.py` — Lark 客户端
+| API 端点 | 方法 | 说明 |
+|----------|------|------|
+| `POST /edo/parse` | 上传文件 | 解析 EDO 文件 |
 
-初始化 Lark SDK 客户端单例。
+### 3. 主数据 CRUD
 
-- `get_lark_client()` — 返回 `lark.Client` 实例，全局只创建一次
-- 使用 `settings.LARK_APP_ID` 和 `settings.LARK_APP_SECRET` 初始化
-- 开发环境设置 `LogLevel.DEBUG`，生产环境 `LogLevel.INFO`
-- SDK 内部自动管理 `tenant_access_token` 的获取和刷新
+仓库地址、收货人、郊区等 9 个主数据表的只读端点。
 
----
+| API 端点 | 方法 | 说明 |
+|----------|------|------|
+| `GET /master-data/warehouse-addresses` | 列表 | 仓库地址 |
+| `GET /master-data/consingees` | 列表 | 收货人 |
+| `GET /master-data/suburbs` | 列表 | 郊区 |
+| `GET /master-data/drivers` | 列表 | 司机 |
+| `GET /master-data/vehicles` | 列表 | 车辆 |
+| `GET /master-data/terminals` | 列表 | 码头 |
+| `GET /master-data/freight-forwarders` | 列表 | 货代 |
+| `GET /master-data/empty-parks` | 列表 | 空箱堆场 |
+| `GET /master-data/distance-matrix` | 列表 | 距离矩阵 |
 
-### `app/core/base_repository.py` — Bitable CRUD 基类
+## Bitable 表结构 (BSB Base - 37 表)
 
-所有 Repository 的基类，封装 Lark Bitable API 的通用 CRUD 操作。子类只需设置 `table_id` 即可继承全部能力。
+### 主数据 (MD-*)
+| 表 | 说明 |
+|----|------|
+| MD-Warehouse Address | 仓库地址 |
+| MD-Warehouse Deliver Config | 仓库配送配置 (Deliver Type, 开闭时间, 最大柜量) |
+| MD-Consingee | 收货人 |
+| MD-Suburb | 郊区 |
+| MD-Base Node | 基础节点 (港口) |
+| MD-Distance Matrix | 距离矩阵 |
+| MD-Vehicle / MD-Driver / MD-Driver Config | 车辆/司机/配置 |
+| MD-Contractor / MD-Sub Carrier / MD-Sub Carrier Box Rate | 承包商/子承运商 |
+| MD-Shipping Line / MD-Empty Park / MD-Terminal | 船公司/空箱堆场/码头 |
+| MD-Terminal Cost / MD-Terminal Fine | 码头费用/罚款 |
+| MD-Freight Forwarder / MD-FF Contact | 货代/联系人 |
 
-**类属性：**
-- `table_id: str` — 子类必须设置，对应 Bitable 表 ID
+### 价格 (MD-Price-*)
+| 表 | 说明 |
+|----|------|
+| MD-Price Level | 价格等级 |
+| MD-Price Cartage / Terminal / Empty | 短驳费/码头费/空箱费 |
+| MD-Price Extra / Overweight / Toll | 附加费/超重费/过路费 |
 
-**提供的方法：**
+### 运营 (Op-*)
+| 表 | 说明 |
+|----|------|
+| Op-Cartage | 短驳委托 (Booking Ref, Consingee, Deliver Config) |
+| Op-Vessel Schedule | 船期 (Vessel Name, Voyage, Base Node) |
+| Op-Import | 进口 (Container Number, Type, Weight, Commodity) |
+| Op-Export | 出口 (Booking Reference, Release Qty, Container Type) |
+| Op-Trip | 行程 |
 
-| 方法 | 说明 | 返回 |
+### 字典
+| 表 | 说明 |
+|----|------|
+| Dict Table | 字典值 (Container Type, Commodity, Deliver Type 等) |
+
+## 环境变量
+
+| 变量 | 必填 | 说明 |
 |------|------|------|
-| `list_records(page_size, page_token, filter_expr, sort_expr, field_names)` | 分页查询记录 | `list[dict]` |
-| `get_record(record_id)` | 获取单条记录 | `dict` |
-| `create_record(fields)` | 创建记录 | `dict` |
-| `update_record(record_id, fields)` | 更新记录 | `dict` |
-| `delete_record(record_id)` | 删除记录 | `None` |
-| `batch_create_records(fields_list)` | 批量创建记录 | `list[dict]` |
-| `list_fields()` | 列出表字段 | `list[dict]` |
-
-**返回格式：** 每条记录都包含 `record_id` + `fields` 展开的字典。
-
-**错误处理：**
-- 记录不存在（code=1254006）→ 抛出 `NotFoundError`
-- 其他 API 错误 → 抛出 `LarkApiError`
-
-**新增 Repository 示例：**
-```python
-class DriverRepository(BaseRepository):
-    table_id = T.md_driver.id  # 只需一行
-```
-
----
-
-### `app/core/base_service.py` — Service 基类
-
-所有 Service 的基类，持有 `repository` 引用。
-
-- `repository: BaseRepository` — 关联的 Repository 实例
-- 子类通过构造函数注入 Repository
-
----
-
-### `app/core/response.py` — 统一响应格式
-
-所有 API 返回统一的 JSON 响应格式。
-
-```json
-// 成功
-{"code": 0, "data": {...}, "message": "success"}
-
-// 失败
-{"code": -1, "data": null, "message": "error description"}
-```
-
-| 方法 | 说明 |
-|------|------|
-| `ApiResponse.ok(data, message)` | 成功响应，code=0 |
-| `ApiResponse.error(code, message, data)` | 错误响应，code 非 0 |
-
----
-
-### `app/core/exceptions.py` — 自定义异常
-
-| 异常类 | code | 说明 |
-|--------|------|------|
-| `AppError` | -1 | 基础异常，所有业务异常的父类 |
-| `NotFoundError` | 404 | 记录/资源不存在 |
-| `ValidationError` | 422 | 数据校验失败 |
-| `LarkApiError` | Lark API 返回的错误码 | Lark API 调用失败 |
-
-所有异常都包含 `code`、`message`、`detail` 三个属性，被 `RequestContextMiddleware` 统一捕获并转为标准响应。
-
----
-
-### `app/core/middleware.py` — 请求中间件
-
-`RequestContextMiddleware` 继承 `BaseHTTPMiddleware`，对每个请求：
-
-1. 生成 8 位 `correlation_id`，挂到 `request.state`
-2. 记录请求开始时间
-3. 捕获 `AppError` → 转为标准错误响应
-4. 捕获未知异常 → 返回 500 错误响应
-5. 在响应头中添加：
-   - `X-Correlation-ID` — 请求追踪 ID
-   - `X-Response-Time-Ms` — 响应耗时（毫秒）
-
----
-
-### `app/core/registry.py` — 模块自动注册
-
-自动扫描 `app/modules/` 下的所有子目录，发现 `router.py` 则注册到 FastAPI。
-
-**工作原理：**
-1. `pkgutil.iter_modules(modules.__path__)` 扫描所有子模块
-2. 尝试 `importlib.import_module(f"app.modules.{name}.router")`
-3. 如果模块有 `router` 属性（`APIRouter` 实例），则 `app.include_router(router)`
-4. 将模块信息存入 `_MODULE_REGISTRY` 字典
-
-**`/modules` 端点返回示例：**
-```json
-{
-  "master_data": {
-    "prefix": "/master-data",
-    "routes": ["/warehouse-addresses", "/consingees", "/suburbs", ...]
-  }
-}
-```
-
-**新增模块只需：** 在 `modules/` 下创建目录，放入 `router.py`（导出 `router = APIRouter(...)`），重启即自动注册。
-
----
-
-### `app/shared/lark_tables.py` — Bitable 表/字段 ID 映射
-
-集中管理 BSB Base 所有 37 张表的 ID 和字段 ID，避免硬编码。
-
-**核心类型：**
-- `FieldRef(id, name)` — 字段引用，存储 `field_id` 和 `field_name`
-- `TableDef(id, name, fields)` — 表定义，存储 `table_id`、表名和字段字典
-
-**使用方式：**
-
-```python
-from app.common.lark_tables import T
-
-# 获取表 ID
-T.md_driver.id  # "tblzxHN8llzAf2ge"
-
-# 获取字段 ID
-T.md_driver.fields["driver_name"].id  # "fldlP3B9Ra"
-
-# 快捷方式：T.<table>.f("<field_key>")
-T.md_driver.f("driver_name")  # "fldlP3B9Ra"
-```
-
-**已映射的表（32 张主表 + APP_TOKEN）：**
-
-| 分类 | 表 |
-|------|-----|
-| 主数据 (MD-*) | Warehouse Address, Warehouse Deliver Config, Consingee, Suburb, Base Node, Distance Matrix, Vehicle, Driver, Driver Config, Contractor, Sub Carrier, Sub Carrier Box Rate, Shipping Line, Empty Park, Terminal, Terminal Cost, Terminal Fine, Freight Forwarder, FF Contact |
-| 价格 (MD-Price-*) | Price Level, Price Cartage, Price Terminal, Price Empty, Price Extra, Price Overweight, Price Toll |
-| 运营 (Op-*) | Cartage, Vessel Schedule, Import, Export, Trip |
-| 字典 | Dict Table |
-
-5 张副本表（名称含"副本"）未映射，因为它们是备份。
-
----
-
-### `app/shared/enums.py` — 业务枚举
-
-定义物流业务中常用的枚举值，全部继承 `str` 和 `Enum`，可直接用作字符串。
-
-| 枚举类 | 值 | 说明 |
-|--------|-----|------|
-| `Depot` | NSW, VIC | 仓库区域 |
-| `ContainerType` | 20STD, 40STD, 20SDL, 40SDL, 20DROP, 40DROP | 集装箱类型 |
-| `DeliverType` | Import, Export, Empty | 配送类型 |
-| `LogisticsStatus` | Pending, In Progress, Completed, Cancelled | 物流状态 |
-| `TerminalName` | DP World NSW/VIC, Patrick NSW/VIC, Hutchison NSW, VICT VIC | 码头名称 |
-
----
-
-### `app/shared/utils.py` — 工具函数
-
-| 函数 | 说明 |
-|------|------|
-| `now_sydney()` | 返回当前悉尼时间（`Australia/Sydney` 时区） |
-| `now_utc()` | 返回当前 UTC 时间 |
-| `format_datetime(dt, fmt)` | 格式化 datetime 为字符串，默认 `"%Y-%m-%d %H:%M:%S"` |
-| `parse_datetime(s, fmt)` | 解析字符串为 datetime |
-
----
-
-### `app/modules/master_data/` — 主数据模块
-
-#### `repository.py`
-
-9 个 Repository 类，每个只需一行设置 `table_id`：
-
-| Repository | 对应表 |
-|-----------|--------|
-| `WarehouseAddressRepository` | MD-Warehouse Address |
-| `ConsingeeRepository` | MD-Consingee |
-| `SuburbRepository` | MD-Suburb |
-| `DriverRepository` | MD-Driver |
-| `VehicleRepository` | MD-Vehicle |
-| `TerminalRepository` | MD-Terminal |
-| `FreightForwarderRepository` | MD-Freight Forwarder |
-| `EmptyParkRepository` | MD-Empty Park |
-| `DistanceMatrixRepository` | MD-Distance Matrix |
-
-全部继承 `BaseRepository`，自动拥有 list/get/create/update/delete/batch_create/list_fields 七个方法。
-
-#### `service.py`
-
-`MasterDataService` 聚合 9 个 Repository，提供面向业务的方法。
-
-- 构造函数中初始化所有 Repository 实例
-- 每个方法直接代理到对应 Repository，未来可在 Service 层添加业务逻辑（如数据转换、校验、跨表查询）
-
-#### `schemas.py`
-
-Pydantic v2 响应模型，用于类型提示和自动 OpenAPI 文档生成。
-
-| Model | 字段 |
-|-------|------|
-| `WarehouseAddressOut` | record_id, address, detail |
-| `ConsingeeOut` | record_id, name, contact, phone, email |
-| `SuburbOut` | record_id, suburb, state, postcode, rural_tailgate |
-
-#### `router.py`
-
-FastAPI 路由，前缀 `/master-data`，标签 `Master Data`。
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/master-data/warehouse-addresses` | GET | 列出仓库地址 |
-| `/master-data/warehouse-addresses/{record_id}` | GET | 获取单个仓库地址 |
-| `/master-data/consingees` | GET | 列出收货人 |
-| `/master-data/consingees/{record_id}` | GET | 获取单个收货人 |
-| `/master-data/suburbs` | GET | 列出郊区 |
-| `/master-data/drivers` | GET | 列出司机 |
-| `/master-data/vehicles` | GET | 列出车辆 |
-| `/master-data/terminals` | GET | 列出码头 |
-| `/master-data/freight-forwarders` | GET | 列出货代 |
-| `/master-data/empty-parks` | GET | 列出空箱堆场 |
-| `/master-data/distance-matrix` | GET | 列出距离矩阵 |
-
-所有列表端点支持 `page_size`（默认 100，最大 500）和 `filter_expr`（Bitable 过滤表达式）查询参数。
-
----
-
-### `pyproject.toml` — 项目配置
-
-使用 `uv` 管理的项目配置文件。
-
-**核心依赖：**
-- `fastapi>=0.115.0` — Web 框架
-- `uvicorn[standard]>=0.34.0` — ASGI 服务器
-- `pydantic>=2.10.0` — 数据校验
-- `pydantic-settings>=2.7.0` — 环境变量管理
-- `httpx>=0.28.0` — 异步 HTTP 客户端
-- `lark-oapi>=1.4.0` — Lark SDK
-- `apscheduler>=3.10.0` — 定时任务
-
-**开发依赖（可选）：**
-- `pytest`, `pytest-asyncio` — 测试
-- `ruff` — 代码检查和格式化
-- `mypy` — 类型检查
-
----
-
-### `.env.example` — 环境变量模板
-
-复制为 `.env` 并填入实际值：
-
-```bash
-LARK_APP_ID=cli_xxxxx              # Lark 开发者后台获取
-LARK_APP_SECRET=xxxxx              # Lark 开发者后台获取
-LARK_BITABLE_APP_TOKEN=WXcubLU2oaJbHdsNTzCjy16Spwc  # BSB Base Token（已填）
-PORT=3000
-ENV=development
-LOG_LEVEL=info
-```
-
----
-
-### `Dockerfile` + `docker-compose.yml`
-
-- Docker 镜像：`python:3.12-slim`
-- 安装依赖 → 复制代码 → 暴露 3000 端口 → 启动 uvicorn
-- docker-compose 从 `.env` 读取配置
-
-```bash
-docker-compose up --build
-```
-
----
-
-### `.ai/` — AI 知识文档
-
-AI 每次新对话自动读取，保持上下文连续性。
-
-| 文件 | 内容 |
-|------|------|
-| `product-brief.md` | 产品定义、目标用户、核心功能 ← 请填写 |
-| `architecture.md` | 技术栈、目录结构、Bitable 完整表结构（37表） |
-| `decisions.md` | 技术决策记录（Python vs TS、不加 Redis、模块化架构等） |
-| `progress.md` | 开发进度日志 |
-| `style-guide.md` | 代码风格约定 |
-
----
+| LARK_APP_ID | 是 | Lark 应用 ID |
+| LARK_APP_SECRET | 是 | Lark 应用 Secret |
+| LARK_BITABLE_APP_TOKEN | 是 | 多维表格 App Token |
+| ZHIPUAI_API_KEY | 是 | 智谱 AI API Key |
+| AI_MODEL | 否 | 智谱模型名 (默认 glm-5v-turbo) |
+| PORT | 否 | 服务端口 (默认 3000) |
+| ENV | 否 | 运行环境 (默认 development) |
+| LOG_LEVEL | 否 | 日志级别 (默认 info) |
 
 ## Lark CLI
-
-调试和查看 Bitable 数据的命令行工具：
 
 ```bash
 # 安装
@@ -443,15 +225,24 @@ lark-cli auth login --recommend
 lark-cli base +base-get --base-token WXcubLU2oaJbHdsNTzCjy16Spwc
 lark-cli base +field-list --base-token WXcubLU2oaJbHdsNTzCjy16Spwc --table-id TABLE_ID
 lark-cli base +record-list --base-token WXcubLU2oaJbHdsNTzCjy16Spwc --table-id TABLE_ID --limit 10
-lark-cli auth status
 ```
 
 ## 开发命令
 
 ```bash
 uv run uvicorn app.main:app --reload --port 3000   # 启动开发服务器
-uv run ruff check .                                  # 代码检查
-uv run ruff format .                                 # 代码格式化
+uv run ruff check . && uv run ruff format .          # 代码检查 + 格式化
 uv run mypy app/                                     # 类型检查
 uv run pytest                                        # 运行测试
 ```
+
+## 技术文档
+
+详细技术文档位于 `.ai/` 目录：
+
+| 文件 | 内容 |
+|------|------|
+| `.ai/cartage-writeback-guide.md` | Cartage 自动录入完整技术文档 |
+| `.ai/architecture.md` | 技术架构、目录结构、Bitable 完整表结构 |
+| `.ai/decisions.md` | 技术决策记录 |
+| `.ai/progress.md` | 开发进度日志 |

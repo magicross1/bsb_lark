@@ -43,7 +43,7 @@ For EACH container found:
 3. voyage: Voyage number (e.g. "613S")
 4. base_node: Must be one of: {dv.base_nodes}. Map port codes: AUSYD→PORT OF SYDNEY, AUMEL→PORT OF MELBOURNE, etc.
 5. container_type: Must be one of: {dv.container_types}
-6. commodity: Must be one of: {dv.commodities}. Infer from goods description if not explicit (e.g. "TEMPERED GLASS" → GEN, "DANGEROUS GOODS" → HAZ, reefer cargo → REEF, out of gauge → OOG, empty container → EMPTY).
+6. commodity: Must be one of: {dv.commodities}. Infer from goods description if not explicit (e.g. "TEMPERED GLASS" → GEN, "DANGEROUS GOODS" → HAZ, reefer cargo → REEF, out of gauge → OOG, empty container → EMPTY/MT, break bulk → BBLK).
 7. container_weight: GROSS weight in TONNES (GROSS KG ÷ 1000, rounded to 2 decimal places)
 
 ### If Export — extract per booking line:

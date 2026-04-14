@@ -205,7 +205,7 @@ class LarkRepository(ABC):
             BatchGetAppTableRecordRequest.builder()
             .app_token(self.app_token)
             .table_id(self.table_id)
-            .request_body(BatchGetAppTableRecordRequestBody.builder().records(record_ids).build())
+            .request_body(BatchGetAppTableRecordRequestBody.builder().record_ids(record_ids).build())
             .build(),
             lark.BaseRequest.builder().build(),
         )
