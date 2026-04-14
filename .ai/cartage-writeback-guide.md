@@ -1,6 +1,6 @@
 # Cartage 自动录入系统 — 技术文档
 
-> 供团队参考和改良。最后更新: 2026-04-14
+> 供团队参考和改良。最后更新: 2026-04-15
 
 ---
 
@@ -12,7 +12,97 @@
 附件 → AI解析 → 地址匹配 → 写回Bitable
 ```
 
-当前已实现 **进口柜（Import）** 和 **出口柜（Export）** 分支。
+当前已实现 **进口柜（Import）** 和 **出口柜（Export）** 分支，支持 **触发模式（Trigger）** 从 Bitable 记录直接触发。
+
+---
+
+## 1b. 触发模式 (Trigger) — 线上生产流程
+
+操作员在 Bitable 上传 Cartage Advise 附件到 Op-Cartage 记录，调用 `POST /cartage/trigger` 触发自动处理。
+
+### 触发流程
+
+```
+操作员上传附件到 Op-Cartage 记录
+         │
+         ▼
+  POST /cartage/trigger
+  (传 record_id 或留空自动发现)
+         │
+         ▼
+  ┌──────────────────────┐
+  │ Step 0: 幂等检查      │  Record Status 已有值 → 拒绝，防止重复处理
+  └──────┬───────────────┘
+         │
+         ▼
+  ┌──────────────────────┐
+  │ Step 1: 下载附件      │  通过 Drive API 下载 file_token 对应的文件
+  └──────┬───────────────┘
+         │
+         ▼
+  ┌──────────────────────┐
+  │ Step 2: AI 解析       │  同手动上传流程
+  └──────┬───────────────┘
+         │
+         ▼
+  ┌──────────────────────┐
+  │ Step 3: 地址匹配      │  同手动上传流程
+  └──────┬───────────────┘
+         │
+         ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │ Step 4: 写回 Bitable (Trigger 专用逻辑)                   │
+  │                                                          │
+  │  原始行 = 触发时传入的 source_record_id                     │
+  │                                                          │
+  │  对每个柜号/booking:                                      │
+  │                                                          │
+  │  ① 重复检查 (查 Op-Import/Export Container Number)        │
+  │     → 重复: CREATE 新 Op-Cartage (Record Status=Duplicate)│
+  │     → 不重复: 继续 ②                                     │
+  │                                                          │
+  │  ② 第一个非重复柜号:                                      │
+  │     UPDATE 原始行 (填入 BR, Consingee, Deliver Config,    │
+  │                     Record Status=Entry Successful,       │
+  │                     Source Cartage=[原始行自身])            │
+  │                                                          │
+  │  ③ 后续非重复柜号:                                        │
+  │     CREATE 新 Op-Cartage (Source Cartage=[原始行 record_id])│
+  │                                                          │
+  │  ④ 全部重复时: UPDATE 原始行 (Record Status=Duplicate)     │
+  │                                                          │
+  │  ⑤ 对每个非重复柜号: 创建 Op-Import/Export (同手动流程)     │
+  └──────────────────────────────────────────────────────────┘
+```
+
+### Trigger API
+
+```
+POST /cartage/trigger
+Content-Type: multipart/form-data
+
+record_id: Op-Cartage record_id (留空则自动发现待处理记录)
+model: AI 模型名 (默认 glm-5v-turbo)
+```
+
+**自动发现逻辑**: 查找 `Cartage Advise 不为空 AND Record Status 为空` 的 Op-Cartage 记录。
+
+**幂等保护**: `trigger_cartage_from_record()` 处理前检查 Record Status，已有值直接抛 `ValueError` 拒绝。防止同一条记录被重复触发创建大量脏数据。
+
+### 新增 Bitable 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Record Status | select | `Entry Successful` / `Duplicate Entry Failed` — 每行独立 |
+| Source Cartage | 双向关联 | 原始行自关联，衍生行关联原始行。按 Source Cartage 分组可聚合同一 Cartage Advise 的所有记录 |
+| Cartage Advise | attachment | 操作员上传的附件，衍生行不复制（通过 Source Cartage 关联查看原始行附件）|
+
+### 设计决策
+
+- **原始行 Source Cartage 自关联** → 按 Source Cartage 筛选/分组时原始行和衍生行在同一组
+- **第一个柜重复时用第二个非重复柜填原行** — 避免出现有附件但数据为空的行
+- **不复制附件到衍生行** — 通过 Source Cartage 关联查看原始行附件
+- **附件下载**: 通过 Drive v1 media API `GET /drive/v1/medias/{file_token}/download`，需手动获取 tenant_access_token（`lark.Client` builder 模式不暴露 `_token_manager`）
 
 ---
 
@@ -174,7 +264,7 @@ Cartage Advise 附件 (Export)
 - `user_hint` — 用户提示
 - `build_result(raw_json)` — 原始 JSON → 结构化结果
 
-**模型**: 智谱 glm-5v-turbo (多模态)，支持 thinking 模式 (budget_tokens=8192)
+**模型**: 智谱 glm-5v-turbo (多模态)，支持 thinking 模式 (budget_tokens=8192)，temperature=0.0 (确定性输出)
 
 **CartageParser** (`app/service/llm_service/cartage/parser.py`):
 - Prompt 中注入字典值 (`CartageDictValues`)，让 AI 直接输出 Bitable 可用的选项值
@@ -389,9 +479,11 @@ create_links={
 **重复跳过**: 不再因一个重复柜号而中止全部录入。重复的柜号被跳过，其余正常录入，跳过信息在返回结果的 `skipped` 列表中。
 
 **`_build_fields()` 通用方法**: 根据 `WritebackFieldRule` 配置，从 source dict 取值，按规则写入：
-- `is_direct_link=True` → 直接写入 `[record_id]` (enrichment 已解析)
-- 有关联规则 (`link_lookup`) → 调用 `LinkFieldResolver.resolve()` 查找/创建
-- 无关联规则 → 直接写入值
+- `is_direct_link=True` → value 有值时直接写入 `[record_id]`，value 为空时 **跳过该字段**（不写 "TBC" 到 duplex link）
+- 有关联规则 (`link_lookup`) → value 有值时调用 `LinkFieldResolver.resolve()` 查找/创建，value 为空时 **跳过该字段**
+- 无关联规则 → 直接写入值，required 但无值时写入 default_value 或 "TBC"
+
+> **重要**: `is_direct_link` 和 `link_lookup` 字段在 value 为空时不写 fallback。写入 "TBC" 字符串到 duplex link 字段会触发 Bitable 错误 1254074。
 
 ### 3.7 LinkFieldResolver 内存缓存
 
@@ -455,6 +547,9 @@ CartageService 维护三级内存缓存，避免重复 Bitable API 调用：
 | Deliver Config | type=21 (双向关联) | 关联 MD-Warehouse Deliver Config, 直接写入 record_id |
 | Import Booking | type=21 (双向关联) | 由 Op-Import 双向关联自动回填 (1-to-1 时每个 Cartage 只有 1 条) |
 | Export Booking | type=21 (双向关联) | 由 Op-Export 双向关联自动回填 (1-to-1 时每个 Cartage 只有 1 条) |
+| Record Status | type=3 (单选) | `Entry Successful` / `Duplicate Entry Failed` — 幂等保护 |
+| Source Cartage | type=21 (双向关联) | 原始行自关联，衍生行关联原始行 — 按 Source Cartage 分组聚合 |
+| Cartage Advise | type=17 (附件) | 操作员上传附件，衍生行不复制 |
 
 ### Op-Export
 
@@ -486,10 +581,39 @@ CartageService 维护三级内存缓存，避免重复 Bitable API 调用：
 3. **select 字段写入**: 值必须是已有选项（精确匹配），否则静默丢弃
 4. **link 字段过滤**: `CurrentValue.[Base Node]="PORT OF MELBOURNE"` 可以按关联记录的显示文本过滤
 5. **link 字段写入**: 使用 `["recXXX"]` 格式，不用 `[{"record_ids": ["recXXX"]}]`
+6. **duplex link 字段不可写纯字符串**: 写入 "TBC" 到双向关联字段会触发 Bitable 错误 1254074。`is_direct_link` / `link_lookup` 字段 value 为空时必须跳过
+7. **附件下载**: 使用 Drive v1 media API `GET /drive/v1/medias/{file_token}/download`（注意 `/download` 后缀不可省略），需自行获取 tenant_access_token
 
 ---
 
-## 6. 代码目录结构
+## 6. 路由注册注意事项
+
+**关键发现**: `APIRouter.include_router()` 必须在子路由装饰器**之后**调用。
+
+```python
+# ❌ 错误 — include_router 在装饰器之前，子路由为空
+cartage_router = APIRouter(prefix="/cartage")
+router = APIRouter()
+router.include_router(cartage_router)  # cartage_router.routes == [] !!
+
+@cartage_router.post("/trigger")  # 装饰器在 include 之后才执行
+async def trigger(): ...
+
+# ✅ 正确 — include_router 在所有装饰器之后
+cartage_router = APIRouter(prefix="/cartage")
+
+@cartage_router.post("/trigger")
+async def trigger(): ...
+
+router = APIRouter()
+router.include_router(cartage_router)  # cartage_router.routes 已有 /trigger
+```
+
+`app/controller/data/__init__.py` 不受影响，因为它从独立文件 import 子 router（装饰器在那些文件中已执行完毕）。
+
+---
+
+## 7. 代码目录结构
 
 ```
 app/
@@ -525,12 +649,12 @@ app/
   controller/
     llm/llm.py                   # HTTP 端点
   repository/
-    cartage.py, import_.py, export_.py  # Op-* 表仓储
+    cartage.py, import_.py, export_.py  # Op-* 表仓储 (cartage 含 download_attachment + _get_tenant_token)
 ```
 
 ---
 
-## 7. 已知局限与改进方向
+## 8. 已知局限与改进方向
 
 | 项目 | 当前状态 | 改进方向 |
 |------|---------|---------|
@@ -539,5 +663,7 @@ app/
 | 依赖注入 | 模块级单例 (`LLMService()`) | FastAPI Depends 或 DI 容器 |
 | Container Type/Commodity 校验 | 无校验，写入不匹配值会被 Bitable 静默丢弃 | 写入前校验选项是否存在，不存在则 fallback |
 | Export 写回 | ✅ 已实现 | 出口柜 release_qty 展开为多条，1-to-1 Cartage-Export 关系 |
+| Trigger 触发模式 | ✅ 已实现 | 幂等保护 (Record Status 检查) + 自动发现待处理记录 |
 | 错误处理 | 写回失败时部分记录已创建 | 需要事务性保证或清理机制 |
 | Vessel Schedule Base Node 更新 | 已有记录 Base Node 为空时不更新 | 考虑 find 时补充更新空字段 |
+| AI 解析稳定性 | temperature=0.0 + prompt 加强 vessel/voyage 约束 | 可考虑多次调用取交集或人工审核机制 |

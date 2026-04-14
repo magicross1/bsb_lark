@@ -6,6 +6,9 @@ from app.service.llm_service.cartage.schemas import CartageDictValues
 CARTAGE_USER_HINT = (
     "Parse this Cartage / Time Slot Request document."
     " Determine if it is Import or Export, then extract all containers or bookings."
+    " CRITICAL: vessel_name and voyage are REQUIRED for every container/booking entry."
+    " They are typically found together as 'VESSEL NAME / VOYAGE' (e.g. 'ONE SAN DIEGO / 613S')."
+    " If you see a vessel reference, extract BOTH the vessel name AND the voyage number."
 )
 
 
@@ -66,6 +69,7 @@ IMPORTANT RULES:
 - Map deliver_type to the exact code from: {dv.deliver_types}
 - If a field is not found, set it to null
 - For Export documents with Journey structure: DELIVER TO EMPTY address is the deliver_address (where empty container goes to shipper)
+- VESSEL NAME AND VOYAGE ARE CRITICAL — they almost always appear together (e.g. "ONE SAN DIEGO / 613S"). Extract BOTH parts: vessel_name="ONE SAN DIEGO", voyage="613S". NEVER leave vessel_name or voyage as null if any vessel reference exists in the document.
 
 Return ONLY a JSON object:
 {{

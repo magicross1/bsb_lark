@@ -127,6 +127,8 @@ app/
 
 **写回配置驱动**: 所有 Bitable 字段的写入规则用 `WritebackFieldRule` 声明式配置，而非硬编码逻辑。
 
+**触发模式 (Trigger)**: 从已有 Op-Cartage 记录触发 — 操作员在 Bitable 上传 Cartage Advise 附件，系统自动下载附件 → 解析 → 匹配 → 写回。第一条非重复柜号 UPDATE 原行，后续 CREATE 新行。Record Status 防止重复处理。
+
 | API 端点 | 方法 | 说明 |
 |----------|------|------|
 | `POST /cartage/parse` | 上传文件 | 解析文档，返回结构化数据 |
@@ -135,6 +137,7 @@ app/
 | `POST /cartage/process-text` | 文本 | 解析 + 地址匹配 |
 | `POST /cartage/writeback` | 上传文件 | 完整流程: 解析 + 匹配 + 写回 Bitable |
 | `POST /cartage/writeback-text` | 文本 | 完整流程 |
+| `POST /cartage/trigger` | Form | 从 Bitable 记录触发: 传 record_id 处理单条，留空自动发现待处理记录 |
 | `POST /cartage/clear-cache` | - | 清除缓存 |
 
 ### 2. EDO 解析
@@ -188,7 +191,7 @@ app/
 ### 运营 (Op-*)
 | 表 | 说明 |
 |----|------|
-| Op-Cartage | 短驳委托 (Booking Ref, Consingee, Deliver Config) |
+| Op-Cartage | 短驳委托 (Booking Ref, Consingee, Deliver Config, Record Status, Source Cartage) |
 | Op-Vessel Schedule | 船期 (Vessel Name, Voyage, Base Node) |
 | Op-Import | 进口 (Container Number, Type, Weight, Commodity) |
 | Op-Export | 出口 (Booking Reference, Release Qty, Container Type) |

@@ -114,7 +114,7 @@ class BaseParser(ABC):
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": messages,
-            "temperature": 0.1,
+            "temperature": 0.0,
             "max_tokens": 4096,
         }
         if model_requires_thinking(self._model):

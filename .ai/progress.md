@@ -301,4 +301,56 @@
 
 ---
 
+### [2026-04-14] 线上版触发流程 — 从 Op-Cartage 记录触发写回
+**做了什么**:
+- **writeback_from_record() 新方法** — 从已有 Op-Cartage 行触发写回:
+  - 第一个非重复柜号: UPDATE 原行（填入 Booking Reference, Consingee, Deliver Config, Record Status, Source Cartage）
+  - 后续非重复柜号: CREATE 新行（Source Cartage → 指向原行）
+  - 重复柜号: CREATE 新行（Record Status = Duplicate Entry Failed）
+  - 全部重复时: UPDATE 原行标记 Duplicate Entry Failed
+- **Record Status 字段** — select 类型，两个选项: Entry Successful / Duplicate Entry Failed
+- **Source Cartage 字段** — 单向关联，原始行自关联，衍生行关联原始行
+- **CartageRepository.download_attachment()** — 通过 Drive API 下载 Bitable 附件
+- **extract_attachment_file_tokens()** — 从附件字段值提取 file_token
+- **POST /cartage/trigger** 端点 — 传入 record_id，自动下载附件 → 解析 → 匹配 → 写回
+- **lark_tables.py** — Op-Cartage 新增 record_status, source_cartage, completed_confirm 字段映射
+
+**设计决策**:
+- 原始行 Source Cartage 自关联 → 按 Source Cartage 筛选/分组时原始行和衍生行在同一组
+- 第一个柜重复时用第二个非重复柜填原行（避免出现有附件但数据为空的行）
+- 不复制附件到衍生行，通过 Source Cartage 关联查看原始行附件
+
+---
+
 *最后更新: 2026-04-14*
+
+### [2026-04-15] Trigger 端点 404 修复 + 附件下载 + 链接字段写回修复
+**做了什么**:
+- **修复 POST /cartage/trigger 返回 404** — 根因: `router.include_router(cartage_router)` 在 `llm.py` 第 17 行执行，此时 `cartage_router` 的路由装饰器尚未执行，导致子路由为空
+  - 修复: 将 `router.include_router()` 调用移到文件末尾（所有装饰器之后）
+  - data controller 不受影响（它从独立文件 import 子 router，装饰器已执行完毕）
+- **修复附件下载 `_token_manager` 报错** — `lark.Client` builder 模式不暴露 `_token_manager`
+  - 修复: 新增 `_get_tenant_token()` 方法，直接调用 auth API 获取 tenant_access_token
+  - Drive media 下载 URL 修正为 `/drive/v1/medias/{file_token}/download`（需 `/download` 后缀）
+- **修复 is_direct_link/link_lookup 字段写入 "TBC" 到 duplex link** — 当 `consingee_id` 为 None 时，`_build_fields` 的 fallback 分支将 "TBC" 字符串写入链接字段，触发 Bitable 1254074 错误
+  - 修复: `is_direct_link` 和 `link_lookup` 规则的 `continue` 不再依赖 `value` 有值，value 为空时直接 skip 该字段，不写 fallback
+
+**E2E 验证** (使用 recvgMkopfDD5n — 5个进口柜 SHEXP26030118):
+- 5 个 Op-Cartage 创建 ✅: 第一个 UPDATE 原行，其余 4 个 CREATE
+- 5 个 Op-Import 创建 ✅: Container Number/Type/Commodity/Weight 正确
+- Record Status = Entry Successful ✅, Source Cartage 正确指向原行 ✅
+- Vessel Schedule (FENG NIAN 361/276S/PORT OF SYDNEY) 新建并链接 ✅
+- 测试数据已清理
+
+### [2026-04-15] 幂等保护 + AI 解析稳定性修复
+**做了什么**:
+- **幂等保护** — `trigger_cartage_from_record` 现在检查 Record Status，已处理的记录直接拒绝（`ValueError`）
+  - `trigger_pending_cartage_records` 的筛选逻辑也改为 `extract_cell_text(r.get("Record Status"))` 处理 select 字段的各种读取格式
+  - 防止同一条记录被重复触发（之前可无限重复创建）
+- **AI 解析稳定性** — `temperature` 从 0.1 降为 0.0（ZhipuAI glm-5v-turbo thinking 模式支持）
+  - Prompt 加强 vessel_name/voyage 提取约束：user_hint 新增 "CRITICAL: vessel_name and voyage are REQUIRED"
+  - system prompt 新增 "VESSEL NAME AND VOYAGE ARE CRITICAL" 规则
+
+**E2E 验证**:
+- 5 个进口柜全部稳定提取 vessel_name=FENG NIAN 361, voyage=276S ✅
+- 第二次 trigger 正确拒绝: "Record recvgMkopfDD5n already processed" ✅

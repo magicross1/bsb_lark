@@ -402,6 +402,9 @@ class _Tables:
             "import_booking": FieldRef("fldM45Xqfe", "Import Booking"),
             "op_allocator": FieldRef("fldy8i5KDX", "Op-Allocator"),
             "logistics_status": FieldRef("fldNIp07QH", "Logictics Status"),
+            "record_status": FieldRef("fld142fIbq", "Record Status"),
+            "source_cartage": FieldRef("fldNRApgGD", "Source Cartage"),
+            "completed_confirm": FieldRef("fldPTO97lU", "Completed Confirm"),
         },
     )
 

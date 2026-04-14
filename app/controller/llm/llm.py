@@ -14,8 +14,6 @@ cartage_router = APIRouter(prefix="/cartage", tags=["Cartage Operations"])
 edo_router = APIRouter(prefix="/edo", tags=["EDO Operations"])
 
 router = APIRouter()
-router.include_router(cartage_router)
-router.include_router(edo_router)
 
 
 # ── Cartage ─────────────────────────────────────────────────
@@ -91,6 +89,30 @@ async def clear_cartage_cache():
     return ApiResponse.ok(message="cache cleared")
 
 
+@cartage_router.post("/trigger")
+async def trigger_cartage_from_record(
+    record_id: str = Form(  # noqa: B008
+        default="",
+        description="Op-Cartage record_id. Leave empty to auto-discover.",
+    ),
+    model: str = Form(default="glm-5v-turbo"),
+):
+    if record_id:
+        try:
+            enriched, writeback = await llm_service.trigger_cartage_from_record(record_id, model=model)
+        except ValueError as e:
+            return ApiResponse.error(message=str(e))
+        return ApiResponse.ok(
+            data={
+                "process": enriched.model_dump(),
+                "writeback": writeback.model_dump(),
+            }
+        )
+
+    results = await llm_service.trigger_pending_cartage_records(model=model)
+    return ApiResponse.ok(data={"processed": len(results), "results": [wb.model_dump() for wb in results]})
+
+
 @cartage_router.post("/writeback")
 async def writeback_cartage_document(
     file: UploadFile = File(..., description="PDF, image, or TXT file"),  # noqa: B008
@@ -157,3 +179,7 @@ async def parse_edo_document(
     finally:
         if tmp_path:
             Path(tmp_path).unlink(missing_ok=True)
+
+
+router.include_router(cartage_router)
+router.include_router(edo_router)

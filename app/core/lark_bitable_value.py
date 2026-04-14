@@ -78,3 +78,18 @@ def extract_link_record_ids(link_field: object) -> list[str]:
                 result.extend(str(i) for i in ids)
         return result
     return []
+
+
+def extract_attachment_file_tokens(attachment_field: object) -> list[str]:
+    """Extract file_token list from a Bitable attachment field value."""
+    if attachment_field is None:
+        return []
+    if isinstance(attachment_field, list):
+        result: list[str] = []
+        for item in attachment_field:
+            if isinstance(item, dict):
+                token = item.get("file_token")
+                if token:
+                    result.append(str(token))
+        return result
+    return []
