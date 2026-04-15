@@ -40,10 +40,12 @@ app/
     pricing/               # MD-Price-* + fee calculators
     operations/            # Op-* tables + AI parsers
       edo/                 # EDO (Empty Delivery Order) AI parser
-        schemas.py         # EdoEntry + EdoParseResult
-        prompts.py         # EDO_SYSTEM_PROMPT, EDO_USER_HINT
+        schemas.py         # EdoEntry + EdoParseResult + EdoDictValues + EdoProcessResult
+        prompts.py         # EDO_SYSTEM_PROMPT, EDO_USER_HINT (动态注入 Shipping Line + Empty Park)
         parser.py          # EdoParser (inherits BaseParser)
-        router.py          # POST /edo/parse
+        enrichment.py      # EdoEnrichmentService (Shipping Line 精确→Short Name; Empty Park 精确→别名→模糊)
+        writeback.py       # EdoWritebackService (按 Container Number 查 Op-Import → UPDATE)
+        writeback_schemas.py # EdoWritebackResult + EdoWritebackEntryRef
       cartage/             # Cartage / Time Slot Request AI parser
         schemas.py         # ImportContainerEntry, ExportBookingEntry, CartageParseResult, CartageDictValues
         prompts.py         # CARTAGE_USER_HINT, build_cartage_system_prompt()
@@ -67,6 +69,8 @@ app/
 - Address Match Pattern: normalize_address → 粗筛(postcode/street) → address_match_score 评分 → 最佳匹配，阈值 MATCH_THRESHOLD=0.6, REVIEW_THRESHOLD=0.8
 - CartageService Pattern: 三级缓存(addresses/deliver_configs/consingees)，避免重复 Bitable API 调用
 - CartageWriteback Pattern: enriched result → 先写 Op-Cartage → 再写 Op-Import/Op-Export（带 Op-Cartage link），link field 写入格式 `["recXXX"]`
+- EDO Match Pattern: Shipping Line 精确名→Short Name fallback；Empty Park 精确名→别名→模糊名+地址三层匹配；EdoDictValues 动态注入 Shipping Line + Empty Park 列表到 prompt
+- EDO Writeback Pattern: 按 Container Number 查找 Op-Import → UPDATE 写入 EDO PIN / Shipping Line(link) / Empty Park(link) / Record Status / Source EDO
 - LinkFieldResolver + filter_expr Pattern: 支持 `filter_expr` 模板渲染（从 context 注入变量），生成 `AND(主条件, 渲染后条件)` 复合过滤，用于 Vessel Name + Voyage 等复合唯一键查找
 - Centralized Lark Client: 所有 Lark API 调用通过统一模块
 - Token Auto-refresh: tenant_access_token 自动刷新

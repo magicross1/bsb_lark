@@ -3,7 +3,7 @@
 > 项目开发进度日志。AI 从这里知道"做到哪了"。
 
 ## Current Sprint / Phase
-架构审计 + 铁律融入完成，待集成测试
+EDO 解析+匹配+写回完成，Cartage trigger 地址匹配验证通过
 
 ## Changelog
 
@@ -354,3 +354,27 @@
 **E2E 验证**:
 - 5 个进口柜全部稳定提取 vessel_name=FENG NIAN 361, voyage=276S ✅
 - 第二次 trigger 正确拒绝: "Record recvgMkopfDD5n already processed" ✅
+
+### [2026-04-15] EDO 解析+匹配+写回完整实现
+**做了什么**:
+- **EDO 解析增强** — EdoEntry 新增 empty_park_address 字段; EdoDictValues 动态从 Bitable 构建（Shipping Line + Empty Park 列表含别名）
+  - Prompt 注入 Shipping Line 和 Empty Park 列表，AI 输出精确 Bitable 名
+  - EdoParser 适配 EdoDictValues 注入，system_prompt 改为 property
+- **EDO 匹配** — EdoEnrichmentService（Shipping Line 精确+Short Name fallback; Empty Park 精确名→别名→模糊名+地址三层匹配）
+  - MD-Empty Park Alias 字段支持（分号分隔的别名列表）
+  - lark_tables.py MD-Empty Park 新增 alias 字段映射 (fldNWhSkie)
+- **EDO 领域服务** — EdoService（Shipping Line / Empty Park 带缓存查询 + build_dict_values）
+  - CacheFactory 扩展 EdoMatchingCacheKey (SHIPPING_LINES, EMPTY_PARKS)
+  - ShippingLineRepository 新增
+- **EDO 写回** — EdoWritebackService：按 Container Number 查找 Op-Import → UPDATE
+  - EdoWritebackSchemas (EdoWritebackResult + EdoWritebackEntryRef)
+  - ImportRepository 新增 download_attachment
+  - lark_tables.py Op-Import 新增 record_status (fldEwvsGtt) + source_edo (fldgijIfl5) 字段映射
+  - LLMService 新增 trigger_edo_from_record + trigger_pending_edo_records
+  - Controller 新增 POST /edo/process, /edo/process-text, /edo/trigger, /edo/clear-cache
+- **Cartage 地址匹配验证** — 确认地址匹配逻辑正常（score=1.0 精确匹配 UNIT 3/222 Woodpark Rd），之前报告的 Consingee/Deliver Config 丢失是暂时性问题
+
+**本地测试结果**:
+- EDO PDF 解析+匹配: Shipping Line / Empty Park 正确匹配 ✅
+- EDO trigger E2E: 解析+匹配+写回逻辑正确 ✅
+- Cartage 地址匹配: UNIT 3/222 Woodpark Rd → score=1.0, Consingee=HF IMPERIAL INTERNATIONAL, Deliver Config=STD ✅

@@ -210,15 +210,9 @@ class _Tables:
         id="tblpyqsI8mFtV1nO",
         name="MD-Empty Park",
         fields={
-            "booking_system": FieldRef("fldrGKeolL", "Booking System"),
-            "dehire_cost": FieldRef("fld3qdJSeT", "De-hire Cost"),
-            "depot": FieldRef("fldhI3KPaa", "Depot"),
-            "price_empty_level": FieldRef("fldpHkykTr", "MD-Price Empty Price Level"),
-            "one_stop_code": FieldRef("fldo3rO16v", "1-STOP Code"),
-            "opening_hours": FieldRef("fldpFaedXs", "Opening Hours"),
-            "facility_address": FieldRef("fld4upbQuY", "Facility Address"),
-            "location": FieldRef("fldutI6xX1", "Location"),
             "empty_park": FieldRef("fldwLEHVad", "Empty Park"),
+            "facility_address": FieldRef("fld4upbQuY", "Facility Address"),
+            "alias": FieldRef("fldNWhSkie", "Alias"),
         },
     )
 
@@ -459,6 +453,8 @@ class _Tables:
             "estimated_arrival": FieldRef("fldzxIVjfb", "EstimatedArrival"),
             "port_of_discharge": FieldRef("flddSwmxQh", "PortOfDischarge"),
             "gateout_time": FieldRef("fldD3FIVbO", "GATEOUT_Time"),
+            "record_status": FieldRef("fldEwvsGtt", "Record Status"),
+            "source_edo": FieldRef("fldgijIfl5", "Source EDO"),
         },
     )
 

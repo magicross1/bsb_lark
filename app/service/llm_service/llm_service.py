@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.cache.factory import CacheFactory
 from app.service.cartage import CartageService
+from app.service.edo import EdoService
 from app.service.llm_service.cartage.cartage_llm import CartageLlmService
 from app.service.llm_service.cartage.enrichment import CartageEnrichmentService
 from app.service.llm_service.cartage.process_schemas import CartageProcessResult
@@ -12,7 +13,10 @@ from app.service.llm_service.cartage.schemas import CartageDictValues, CartagePa
 from app.service.llm_service.cartage.writeback import CartageWritebackService
 from app.service.llm_service.cartage.writeback_schemas import CartageWritebackResult
 from app.service.llm_service.edo.edo_llm import EdoLlmService
-from app.service.llm_service.edo.schemas import EdoParseResult
+from app.service.llm_service.edo.enrichment import EdoEnrichmentService
+from app.service.llm_service.edo.schemas import EdoDictValues, EdoParseResult, EdoProcessResult
+from app.service.llm_service.edo.writeback import EdoWritebackService
+from app.service.llm_service.edo.writeback_schemas import EdoWritebackResult
 
 
 class LLMService:
@@ -26,18 +30,59 @@ class LLMService:
         cartage_enrichment: CartageEnrichmentService | None = None,
         cartage_writeback: CartageWritebackService | None = None,
         edo_llm: EdoLlmService | None = None,
+        edo: EdoService | None = None,
+        edo_enrichment: EdoEnrichmentService | None = None,
+        edo_writeback: EdoWritebackService | None = None,
     ) -> None:
-        self._cartage = cartage or CartageService(cache_factory=cache_factory or CacheFactory())
+        cf = cache_factory or CacheFactory()
+        self._cartage = cartage or CartageService(cache_factory=cf)
         self._cartage_llm = cartage_llm or CartageLlmService()
         self._cartage_enrichment = cartage_enrichment or CartageEnrichmentService(self._cartage)
         self._cartage_writeback = cartage_writeback or CartageWritebackService()
-        self._edo = edo_llm or EdoLlmService()
+        self._edo_llm = edo_llm or EdoLlmService()
+        self._edo = edo or EdoService(cache_factory=cf)
+        self._edo_enrichment = edo_enrichment or EdoEnrichmentService(self._edo)
+        self._edo_writeback = edo_writeback or EdoWritebackService()
 
-    async def parse_edo(self, source: str | Path, *, model: str | None = None) -> EdoParseResult:
-        return await self._edo.parse(source, model=model)
+    async def parse_edo(
+        self,
+        source: str | Path,
+        *,
+        model: str | None = None,
+        dict_values: EdoDictValues | None = None,
+    ) -> EdoParseResult:
+        return await self._edo_llm.parse(source, model=model, dict_values=dict_values)
 
-    async def parse_edo_text(self, text: str, *, model: str | None = None) -> EdoParseResult:
-        return await self._edo.parse_text(text, model=model)
+    async def parse_edo_text(
+        self,
+        text: str,
+        *,
+        model: str | None = None,
+        dict_values: EdoDictValues | None = None,
+    ) -> EdoParseResult:
+        return await self._edo_llm.parse_text(text, model=model, dict_values=dict_values)
+
+    async def process_edo(
+        self,
+        source: str | Path,
+        *,
+        model: str | None = None,
+        dict_values: EdoDictValues | None = None,
+    ) -> EdoProcessResult:
+        dv = dict_values or await self._edo.build_dict_values()
+        parsed = await self._edo_llm.parse(source, model=model, dict_values=dv)
+        return await self._edo_enrichment.enrich(parsed)
+
+    async def process_edo_text(
+        self,
+        text: str,
+        *,
+        model: str | None = None,
+        dict_values: EdoDictValues | None = None,
+    ) -> EdoProcessResult:
+        dv = dict_values or await self._edo.build_dict_values()
+        parsed = await self._edo_llm.parse_text(text, model=model, dict_values=dv)
+        return await self._edo_enrichment.enrich(parsed)
 
     async def parse_cartage_document(
         self,
@@ -180,8 +225,81 @@ class LLMService:
 
         return results
 
+    async def trigger_edo_from_record(
+        self,
+        record_id: str,
+        *,
+        model: str | None = None,
+    ) -> tuple[EdoProcessResult, EdoWritebackResult]:
+        from app.core.lark_bitable_value import extract_attachment_file_tokens, extract_cell_text
+        from app.repository.import_ import ImportRepository
+
+        import_repo = ImportRepository()
+        record = await import_repo.get_record(record_id)
+
+        existing_status = extract_cell_text(record.get("Record Status"))
+        if existing_status:
+            raise ValueError(f"Record {record_id} already processed (Record Status={existing_status})")
+
+        edo_file_field = record.get("EDO File")
+        file_tokens = extract_attachment_file_tokens(edo_file_field)
+        if not file_tokens:
+            raise ValueError(f"No EDO File attachment found in record {record_id}")
+
+        tmp_path = await import_repo.download_attachment(file_tokens[0])
+        try:
+            dv = await self._edo.build_dict_values()
+            parsed = await self._edo_llm.parse(str(tmp_path), model=model, dict_values=dv)
+            enriched = await self._edo_enrichment.enrich(parsed)
+            writeback = await self._edo_writeback.writeback_from_record(enriched, source_record_id=record_id)
+            return enriched, writeback
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    async def trigger_pending_edo_records(
+        self,
+        *,
+        model: str | None = None,
+    ) -> list[EdoWritebackResult]:
+        from app.core.lark_bitable_value import extract_attachment_file_tokens, extract_cell_text
+        from app.repository.import_ import ImportRepository
+
+        import_repo = ImportRepository()
+        records, _ = await import_repo.list_records(
+            field_names=["EDO File", "Record Status"],
+            page_size=100,
+        )
+
+        pending = [r for r in records if r.get("EDO File") and not extract_cell_text(r.get("Record Status"))]
+
+        _logger = logging.getLogger(__name__)
+        results: list[EdoWritebackResult] = []
+        for r in pending:
+            rid = r["record_id"]
+            edo_file_field = r.get("EDO File")
+            file_tokens = extract_attachment_file_tokens(edo_file_field)
+            if not file_tokens:
+                continue
+
+            tmp_path = await import_repo.download_attachment(file_tokens[0])
+            try:
+                dv = await self._edo.build_dict_values()
+                parsed = await self._edo_llm.parse(str(tmp_path), model=model, dict_values=dv)
+                enriched = await self._edo_enrichment.enrich(parsed)
+                writeback = await self._edo_writeback.writeback_from_record(enriched, source_record_id=rid)
+                results.append(writeback)
+            except Exception as e:
+                _logger.error("Failed to process EDO record %s: %s", rid, e)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
+        return results
+
     def clear_cartage_cache(self) -> None:
         self._cartage.clear_cache()
+
+    def clear_edo_cache(self) -> None:
+        self._edo.clear_cache()
 
 
 llm_service = LLMService()
