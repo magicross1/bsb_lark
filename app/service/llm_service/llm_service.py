@@ -5,13 +5,12 @@ from pathlib import Path
 
 from app.cache.factory import CacheFactory
 from app.service.cartage import CartageService
+from app.service.model.cartage_writeback_schemas import CartageWritebackResult
 from app.service.edo import EdoService
 from app.service.llm_service.cartage.cartage_llm import CartageLlmService
 from app.service.llm_service.cartage.enrichment import CartageEnrichmentService
 from app.service.llm_service.cartage.process_schemas import CartageProcessResult
 from app.service.llm_service.cartage.schemas import CartageDictValues, CartageParseResult
-from app.service.llm_service.cartage.writeback import CartageWritebackService
-from app.service.llm_service.cartage.writeback_schemas import CartageWritebackResult
 from app.service.llm_service.edo.edo_llm import EdoLlmService
 from app.service.llm_service.edo.enrichment import EdoEnrichmentService
 from app.service.llm_service.edo.schemas import EdoDictValues, EdoParseResult, EdoProcessResult
@@ -28,7 +27,6 @@ class LLMService:
         cartage: CartageService | None = None,
         cartage_llm: CartageLlmService | None = None,
         cartage_enrichment: CartageEnrichmentService | None = None,
-        cartage_writeback: CartageWritebackService | None = None,
         edo_llm: EdoLlmService | None = None,
         edo: EdoService | None = None,
         edo_enrichment: EdoEnrichmentService | None = None,
@@ -38,7 +36,6 @@ class LLMService:
         self._cartage = cartage or CartageService(cache_factory=cf)
         self._cartage_llm = cartage_llm or CartageLlmService()
         self._cartage_enrichment = cartage_enrichment or CartageEnrichmentService(self._cartage)
-        self._cartage_writeback = cartage_writeback or CartageWritebackService()
         self._edo_llm = edo_llm or EdoLlmService()
         self._edo = edo or EdoService(cache_factory=cf)
         self._edo_enrichment = edo_enrichment or EdoEnrichmentService(self._edo)
@@ -131,7 +128,7 @@ class LLMService:
     ) -> tuple[CartageProcessResult, CartageWritebackResult]:
         parsed = await self._cartage_llm.parse_document(source, model=model, dict_values=dict_values)
         enriched = await self._cartage_enrichment.enrich(parsed)
-        writeback = await self._cartage_writeback.writeback(enriched)
+        writeback = await self._cartage.writeback(enriched)
         return enriched, writeback
 
     async def process_and_writeback_cartage_text(
@@ -143,7 +140,7 @@ class LLMService:
     ) -> tuple[CartageProcessResult, CartageWritebackResult]:
         parsed = await self._cartage_llm.parse_text(text, model=model, dict_values=dict_values)
         enriched = await self._cartage_enrichment.enrich(parsed)
-        writeback = await self._cartage_writeback.writeback(enriched)
+        writeback = await self._cartage.writeback(enriched)
         return enriched, writeback
 
     async def trigger_cartage_from_record(
@@ -177,7 +174,7 @@ class LLMService:
         try:
             parsed = await self._cartage_llm.parse_document(str(tmp_path), model=model, dict_values=dict_values)
             enriched = await self._cartage_enrichment.enrich(parsed)
-            writeback = await self._cartage_writeback.writeback_from_record(enriched, source_record_id=record_id)
+            writeback = await self._cartage.writeback_from_record(enriched, source_record_id=record_id)
             return enriched, writeback
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -216,7 +213,7 @@ class LLMService:
             try:
                 parsed = await self._cartage_llm.parse_document(str(tmp_path), model=model, dict_values=dict_values)
                 enriched = await self._cartage_enrichment.enrich(parsed)
-                writeback = await self._cartage_writeback.writeback_from_record(enriched, source_record_id=rid)
+                writeback = await self._cartage.writeback_from_record(enriched, source_record_id=rid)
                 results.append(writeback)
             except Exception as e:
                 logger.error("Failed to process record %s: %s", rid, e)
