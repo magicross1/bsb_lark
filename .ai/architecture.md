@@ -17,49 +17,98 @@
 ## Directory Structure
 ```
 app/
-  main.py                  # FastAPI entry + auto module registration
+  main.py                  # FastAPI entry + middleware + router mount
   config/
-    settings.py            # Pydantic Settings (env vars + ZHIPUAI_API_KEY, AI_MODEL)
+    app_settings.py        # Pydantic Settings (env vars)
     lark.py                # Lark client singleton
-    ai.py                  # ZhipuAI client singleton
+    cartage_matching.py    # Cartage address match threshold constants
   core/
-    base_repository.py     # Generic Bitable CRUD
+    base_parser.py         # Base AI parser (PDF/image/text → AI → JSON)
     base_service.py        # Service base class
-    base_parser.py         # Base AI parser (PDF/image/text → AI → JSON), supports multi-format input
-    response.py            # Unified response {code, data, message}
-    exceptions.py          # AppError, NotFoundError, LarkApiError
-    middleware.py           # Correlation ID + error handling
-    registry.py            # Auto-discover & register module routers
-  shared/
-    lark_tables.py         # 37 Bitable table/field ID mappings
-    enums.py               # Depot, ContainerType, DeliverType
+    lark.py                # Lark client singleton (re-export)
+    llm.py                 # ZhipuAI client + model helpers
+    lark_bitable_value.py  # extract_cell_text, link_field_contains_record_id
     utils.py               # Date/time helpers (Sydney timezone)
+    midlleware/registry.py # Module auto-registration
+  common/
+    lark_tables.py         # All 37 Bitable table/field ID mappings
+    lark_repository.py     # Generic Bitable CRUD base class
+    bitable_fields.py      # Global Bitable field type registry (text/number/datetime/link/select)
+    bitable_query.py       # BitableQuery chainable filter builder
+    relation_loader.py     # RelationLoader + RelationConfig (批量关联字段解析, 消除 N+1)
+    response.py            # Unified response envelope {code, data, message}
+    exceptions.py          # AppError, NotFoundError, LarkApiError
+    enums.py               # Depot, ContainerType, DeliverType, etc.
+  entity/
     address.py             # NormalizedAddress, normalize_address(), address_match_score()
-  modules/                 # Business modules (auto-registered)
-    master_data/           # MD-* tables (9 repos + WarehouseDeliverConfigRepository)
-    pricing/               # MD-Price-* + fee calculators
-    operations/            # Op-* tables + AI parsers
-      edo/                 # EDO (Empty Delivery Order) AI parser
-        schemas.py         # EdoEntry + EdoParseResult + EdoDictValues + EdoProcessResult
-        prompts.py         # EDO_SYSTEM_PROMPT, EDO_USER_HINT (动态注入 Shipping Line + Empty Park)
-        parser.py          # EdoParser (inherits BaseParser)
-        enrichment.py      # EdoEnrichmentService (Shipping Line 精确→Short Name; Empty Park 精确→别名→模糊)
+    relation.py            # RelationResolver, RelationHop (声明式跨表关联解析)
+    link_resolver.py       # LinkFieldResolver (关联字段查找/创建)
+    schemas.py             # Master data output schemas
+  cache/
+    factory.py             # CacheFactory (in-memory cache)
+    constants.py           # Cache key definitions
+  component/               # 外部网站爬虫 Provider
+    VbsSearchProvider.py       # VBS 码头查询 (集装箱可用性/ETA/Storage Date)
+    HutchisonPortsProvider.py  # Hutchison Ports (import availability/match pin)
+    OneStopProvider.py         # 1-Stop (集装箱信息/海关货物状态/空箱归还)
+    ContainerChainProvider.py  # ContainerChain (import/export 集装箱信息)
+    __init__.py
+  controller/
+    router.py              # Top-level router aggregation
+    data/                  # Master data CRUD controllers
+    llm/llm.py             # EDO + Cartage LLM controllers
+    email/                 # Email controller (future)
+    pricing/               # Pricing controller (future)
+    sync/                  # Sync controller — 码头数据同步
+  service/
+    cartage.py             # Cartage 领域服务 (主数据缓存 + Writeback 统一入口)
+    consingee.py           # Consingee 领域服务
+    warehouse_deliver_config.py  # Deliver config 领域服务
+    edo.py                 # EDO 领域服务 (Shipping Line/Empty Park 缓存 + dict_values)
+    ...                    # Other domain services
+    sync/                  # Sync services (vessel/container/clear/vbs)
+      base.py               # 共享类型 (FieldMapping/LinkConfig/BatchCondition/OverwritePolicy) + 共享逻辑 (build_update_fields/batch_write_back/LinkResolver)
+      vessel_sync.py       # VesselSyncService + BatchCondition
+      container_sync.py    # ContainerSyncService + BatchCondition
+      clear_sync.py        # ClearSyncService + MultiProviderBatchCondition
+      vbs_sync.py          # VbsSyncService + MultiProviderBatchCondition (VBS Terminal 路由)
+      model/               # Sync schemas
+        vessel_sync_schemas.py
+        container_sync_schemas.py
+        clear_sync_schemas.py
+        vbs_sync_schemas.py
+    model/                 # 共享数据模型 (schemas/config 跨 service 使用)
+      cartage_writeback_config.py  # WritebackFieldRule, OP_IMPORT/EXPORT_RULES
+      cartage_writeback_schemas.py # CartageWritebackResult, WritebackRecordRef, SkippedContainer
+    llm_service/
+      llm_service.py      # LLM application service (facade: parse + process + enrich)
+      cartage/
+        cartage_llm.py     # Cartage LLM orchestration (file/text → parser)
+        parser.py          # CartageParser (inherits BaseParser)
+        prompts.py         # CARTAGE_SYSTEM_PROMPT, CARTAGE_USER_HINT
+        schemas.py         # CartageParseResult, CartageDictValues, etc.
+        result_builder.py  # Raw LLM → CartageParseResult
+        enrichment.py      # CartageEnrichmentService (parse result → Bitable match)
+        process_schemas.py # CartageProcessResult, AddressMatch, ExportBookingMatch
+        export_bookings.py # expand_export_bookings()
+      edo/
+        edo_llm.py         # EDO LLM orchestration
+        parser.py          # EdoParser
+        schemas.py         # EdoEntry, EdoParseResult, EdoDictValues, EdoProcessResult
+        prompts.py         # EDO prompts (动态注入 Shipping Line + Empty Park)
+        enrichment.py      # EdoEnrichmentService (精确→别名→模糊三层匹配)
         writeback.py       # EdoWritebackService (按 Container Number 查 Op-Import → UPDATE)
         writeback_schemas.py # EdoWritebackResult + EdoWritebackEntryRef
-      cartage/             # Cartage / Time Slot Request AI parser
-        schemas.py         # ImportContainerEntry, ExportBookingEntry, CartageParseResult, CartageDictValues
-        prompts.py         # CARTAGE_USER_HINT, build_cartage_system_prompt()
-        parser.py          # CartageParser (inherits BaseParser)
-        result_builder.py  # build_cartage_parse_result()
-        enrichment.py      # CartageEnrichmentService (parse result → address/consingee matching)
-        process_schemas.py # CartageProcessResult, AddressMatch, ImportContainerMatch, ExportBookingMatch
-        export_bookings.py # expand_export_bookings()
-        writeback.py       # CartageWritebackService (enriched result → Bitable write)
-        writeback_config.py # WritebackFieldRule, OP_IMPORT_RULES — config-driven writeback with filter_expr + NestedLink
-        writeback_schemas.py # CartageWritebackResult, WritebackRecordRef
-        router.py          # POST /cartage/parse, /process, /writeback, /clear-cache
-    email/                 # Email automation
-    sync/                  # Cross-table data sync
+  repository/
+    cartage.py             # Op-Cartage
+    import_.py             # Op-Import
+    export_.py             # Op-Export
+    warehouse_address.py   # MD-Warehouse Address
+    warehouse_deliver_config.py  # MD-Warehouse Deliver Config
+    consingee.py           # MD-Consingee
+    shipping_line.py       # MD-Shipping Line
+    empty_park.py          # MD-Empty Park
+    ...                    # Other table repositories
 ```
 
 ## Key Patterns
@@ -71,6 +120,26 @@ app/
 - CartageWriteback Pattern: enriched result → 先写 Op-Cartage → 再写 Op-Import/Op-Export（带 Op-Cartage link），link field 写入格式 `["recXXX"]`
 - EDO Match Pattern: Shipping Line 精确名→Short Name fallback；Empty Park 精确名→别名→模糊名+地址三层匹配；EdoDictValues 动态注入 Shipping Line + Empty Park 列表到 prompt
 - EDO Writeback Pattern: 按 Container Number 查找 Op-Import → UPDATE 写入 EDO PIN / Shipping Line(link) / Empty Park(link) / Record Status / Source EDO
+- RelationLoader Pattern: 批量关联字段解析 — 收集 record_id → 并发 batch_get → 注入回主记录，消除 N+1 串行调用
+- Component Provider Pattern: 外部网站爬虫 Provider，每个 Provider 独立实现登录+抓取+解析，目前 4 个: VBS/Hutchison/1-Stop/ContainerChain
+- Sync Module Three-Step Pattern: 所有爬虫同步模块统一遵循：
+  1. **数据来源**（二选一）：手动传入业务标识 → `sync()`；或声明式 `BatchCondition`（name + description + query + write_fields）注册到 dict → `sync_batch()` 自动筛选
+  2. **调 Provider 拿数据**：单 Provider 或多 Provider 路由（按业务字段如 Terminal 路由，支持 fallback），路由逻辑在 service 层
+  3. **批量写回 Bitable**：`batch_update_records` → 失败回退逐条；声明式 `FieldMapping`（provider_key → bitable_field + overwrite policy）配置驱动
+  - 已实现：Vessel（1-Stop → Op-Vessel Schedule）、Container（1-Stop → Op-Import）、Clear（按 Terminal 路由 1-Stop customs / Hutchison → Op-Import）、VBS（按 Terminal 路由 5 个 VBS operation → Op-Import）
+- BitableQuery Unified Pattern: 唯一条件定义机制，禁止 filter_fn 双轨制：
+  - 每个子句同时存储 `filter_expr`(服务端) 和 `predicate`(客户端)
+  - `build()` → 服务端 filter_expr（预筛选，减少数据拉取）
+  - `filter(records)` → 客户端 Python 精筛（保证正确性，处理 Bitable 无法表达的条件如 `ETA < now()`）
+  - `.any_empty(fields)` — 任一字段为空 → `OR(f1="", f2="", ...)`
+  - `.not_in_or_empty(field, values)` — 字段为空或不在列表中 → `OR(field="", AND(field!="v1", ...))`
+  - `.client_filter(predicate)` — 纯客户端筛选条件（如 `ETA < now()`）
+  - Bitable **不支持 `NOT`** — 为空用 `=""`，非空用 `!=""`
+- Clear Provider Routing Pattern: 按 Terminal Full Name 选择 Provider：空→1-Stop customs fallback Hutchison；HUTCHISON PORTS - PORT BOTANY→只 Hutchison；其他→只 1-Stop customs
+- VBS Terminal Routing Pattern: 按 Terminal Full Name 路由到 VBS operation：DP WORLD NS→dpWorldNSW / DP WORLD VI→dpWorldVIC / PATRICK NS→patrickNSW / PATRICK VI→patrickVIC / VICTORIA INTERNATIONAL→victVIC；Patrick VIC 的 HTML 使用 `MovementDetailsForm` 前缀（其他码头用 `ContainerVesselDetailsForm`），字段名也不同：ImportAvailability→ContainerAvailability, StorageStartDate→ContainerStorageStart；日期格式含秒需多格式尝试
+- OverwritePolicy Pattern: 字段覆盖策略配置驱动 — ALWAYS(有值就覆盖)/NON_EMPTY(空值不覆盖,默认)/ONCE(已有值不覆盖)；FieldMapping 的 overwrite 字段控制行为，build_update_fields 自动执行
+- Bitable Field Type Registry Pattern: `bitable_fields.py` 全局注册所有字段类型，FieldMapping 从注册表自动推导 field_type，不再重复声明
+- Sync Base Shared Logic Pattern: `service/sync/base.py` 集中定义 FieldMapping/LinkConfig/BatchCondition/OverwritePolicy/LinkResolver + 共享函数 build_update_fields/batch_write_back/parse_datetime_to_timestamp，所有 sync 模块复用
 - LinkFieldResolver + filter_expr Pattern: 支持 `filter_expr` 模板渲染（从 context 注入变量），生成 `AND(主条件, 渲染后条件)` 复合过滤，用于 Vessel Name + Voyage 等复合唯一键查找
 - Centralized Lark Client: 所有 Lark API 调用通过统一模块
 - Token Auto-refresh: tenant_access_token 自动刷新
@@ -160,4 +229,4 @@ app/
 | AI_MODEL | 智谱模型名 | No (default: glm-5v-turbo) |
 
 ---
-*最后更新: 2026-04-12*
+*最后更新: 2026-04-21*

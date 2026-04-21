@@ -9,6 +9,38 @@ if TYPE_CHECKING:
 
 _BATCH_CHUNK_SIZE = 100
 
+_terminal_mapping_cache: dict[str, dict[str, str]] | None = None
+
+
+async def load_terminal_mapping() -> dict[str, dict[str, str]]:
+    """加载 MD-Terminal 表，构建 {Terminal Full Name: {"Depot": depot_value}} 映射。
+
+    结果缓存在模块级变量中，避免重复 Bitable API 调用。
+    """
+    global _terminal_mapping_cache
+    if _terminal_mapping_cache is not None:
+        return _terminal_mapping_cache
+
+    from app.common.lark_tables import T
+    from app.common.lark_repository import BaseRepository
+
+    class _TerminalRepo(BaseRepository):
+        table_id = T.md_terminal.id
+
+    repo = _TerminalRepo()
+    records = await repo.list_all_records(field_names=["Terminal Full Name", "Depot"])
+
+    mapping: dict[str, dict[str, str]] = {}
+    for r in records:
+        from app.core.lark_bitable_value import extract_cell_text
+        full_name = extract_cell_text(r.get("Terminal Full Name"))
+        depot = extract_cell_text(r.get("Depot"))
+        if full_name:
+            mapping[full_name] = {"Depot": depot}
+
+    _terminal_mapping_cache = mapping
+    return mapping
+
 
 def extract_linked_ids(field_value: object) -> list[str]:
     """从关联字段值中提取所有 record_id。

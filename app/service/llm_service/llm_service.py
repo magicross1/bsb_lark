@@ -4,9 +4,9 @@ import logging
 from pathlib import Path
 
 from app.cache.factory import CacheFactory
-from app.service.cartage import CartageService
-from app.service.model.cartage_writeback_schemas import CartageWritebackResult
-from app.service.edo import EdoService
+from app.service.cartage.cartage import CartageService
+from app.service.cartage.model.cartage_writeback_schemas import CartageWritebackResult
+from app.service.edo.edo import EdoService
 from app.service.llm_service.cartage.cartage_llm import CartageLlmService
 from app.service.llm_service.cartage.enrichment import CartageEnrichmentService
 from app.service.llm_service.cartage.process_schemas import CartageProcessResult

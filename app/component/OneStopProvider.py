@@ -68,7 +68,17 @@ def _parse_customs_cargo_status(result_json):
     return info
 
 
-def _parse_match_containers_info(result_json, ctn_dict):
+_TERMINAL_MAPPING = {
+    "DP WORLD NS PORT BOTANY": {"Terminal": "Dp World NSW", "Depot": "NSW", "PortOfDischarge": "PORT OF SYDNEY"},
+    "PATRICK NS PORT BOTANY": {"Terminal": "Patrick NSW", "Depot": "NSW", "PortOfDischarge": "PORT OF SYDNEY"},
+    "HUTCHISON PORTS - PORT BOTANY": {"Terminal": "HUTCHISON NSW", "Depot": "NSW", "PortOfDischarge": "PORT OF SYDNEY"},
+    "DP WORLD, VI, WEST SWANSON": {"Terminal": "Dp World VIC", "Depot": "VIC", "PortOfDischarge": "PORT OF MELBOURNE"},
+    "PATRICK, VI, EAST SWANSON": {"Terminal": "Patrick VIC", "Depot": "VIC", "PortOfDischarge": "PORT OF MELBOURNE"},
+    "VICTORIA INTERNATIONAL CONTAINER TERMINAL": {"Terminal": "VICT VIC", "Depot": "VIC", "PortOfDischarge": "PORT OF MELBOURNE"},
+}
+
+
+def _parse_match_containers_info(result_json):
     """
     解析 matchContainersInfo 接口结果（EDO 匹配用）。
     包含 vessel、port、ETA、存储日期、各事件状态等信息。
@@ -90,13 +100,10 @@ def _parse_match_containers_info(result_json, ctn_dict):
         vessel_in = vessel_in_raw.split('(')[-1].split('|')[0].strip() if vessel_in_raw else None
         in_voyage = vessel_in_raw.split('|')[-1].split(')')[0].strip() if vessel_in_raw else None
 
-        _, depot = ctn_dict.get(container_number, (None, None))
         event_place = container.get("EventPlace", "")
-        # 判断终端是否匹配
-        from app.common.relation_loader import load_terminal_mapping
-        terminal_mapping = load_terminal_mapping()
-        terminal_info = terminal_mapping.get(event_place)
-        terminal_match = terminal_info and terminal_info.get("Depot") == depot
+        pod = container.get("PortOfDischarge")
+        terminal_info = _TERMINAL_MAPPING.get(event_place)
+        terminal_match = bool(terminal_info and terminal_info.get("PortOfDischarge") == pod)
 
         gross_weight = container.get('GrossWeight')
 
@@ -203,7 +210,7 @@ class OneStopProvider:
     _CLIENT_ID = '1STOP'
     _USERNAME = "bsbtransport"
     _PASSWORD = "Cpy19871230"
-    _PROXY = "http://127.0.0.1:7890"
+    _PROXY = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -283,15 +290,14 @@ class OneStopProvider:
                     logger.error(f"get_containers_info 失败，箱号: {slice_list}")
         return result
 
-    async def match_containers_info_by_list(self, ctn_vessel_dict: dict) -> dict:
+    async def match_containers_info_by_list(self, container_list: list[str]) -> dict:
         """
         批量查询集装箱详细匹配信息（用于 EDO 匹配流程）
 
-        :param ctn_vessel_dict: {箱号: (vessel名称, depot)}
+        :param container_list: 箱号列表
         :return: {箱号: {...详细信息...}}
         """
         await self._ensure_session()
-        container_list = list(ctn_vessel_dict.keys())
         result = {}
         for i in range(0, len(container_list), 10):
             slice_list = container_list[i:i + 10]
@@ -299,7 +305,7 @@ class OneStopProvider:
             async with self.session.post(url, proxy=self._PROXY, headers=self._headers, json={"Containers": slice_list}) as response:
                 if response.status == 200:
                     result_json = await response.json()
-                    result.update(_parse_match_containers_info(result_json, ctn_vessel_dict))
+                    result.update(_parse_match_containers_info(result_json))
                 else:
                     logger.error(f"match_containers_info 失败，箱号: {slice_list}")
         return result
@@ -327,11 +333,11 @@ class OneStopProvider:
                     logger.error(f"customs_cargo_status 失败，箱号: {slice_list}")
         return result
 
-    async def _vessel_search_by_name(self, vessel_name, operation):
+    async def _vessel_search_by_name(self, vessel_name, base_node):
         """查询单个船名的班轮信息"""
-        port_dict = {"nsw": "AUSYD", "vic": "AUMEL"}
+        port_dict = {"PORT OF SYDNEY": "AUSYD", "PORT OF MELBOURNE": "AUMEL"}
         payload = {
-            'PortOfCall': port_dict[operation],
+            'PortOfCall': port_dict[base_node],
             'VesselLloydsVoyage': vessel_name,
             'Vessel': "",
             'Terminal': "",
@@ -343,7 +349,7 @@ class OneStopProvider:
                 return await response.json()
             return None
 
-    async def vessel_search_by_name_list(self, vessel_map_dict: dict, operation: str) -> dict:
+    async def vessel_search_by_name_list(self, vessel_map_dict: dict, base_node: str) -> dict:
         """
         批量查询船名班期，返回解析后的 {full_vessel_name: {...ETA/ETD...}}
 
@@ -352,7 +358,7 @@ class OneStopProvider:
         :return: {full_vessel_name: {...}}
         """
         await self._ensure_session()
-        tasks = {key: self._vessel_search_by_name(vessel_map_dict[key][0], operation) for key in vessel_map_dict}
+        tasks = {key: self._vessel_search_by_name(vessel_map_dict[key][0], base_node) for key in vessel_map_dict}
         raw_results = await asyncio.gather(*tasks.values())
 
         result = {}

@@ -7,7 +7,7 @@ from typing import Any
 from app.config.cartage_matching import ADDRESS_MATCH_MIN_SCORE, ADDRESS_MATCH_REVIEW_BELOW_SCORE
 from app.core.lark_bitable_value import extract_cell_text, link_field_contains_record_id
 from app.entity.address import NormalizedAddress, address_match_score, normalize_address
-from app.service.cartage import CartageService
+from app.service.cartage.cartage import CartageService
 from app.service.llm_service.cartage.process_schemas import (
     AddressMatch,
     CartageProcessResult,

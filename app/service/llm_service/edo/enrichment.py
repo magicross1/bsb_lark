@@ -4,7 +4,7 @@ import logging
 import re
 
 from app.core.lark_bitable_value import extract_cell_text
-from app.service.edo import EdoService
+from app.service.edo.edo import EdoService
 from app.service.llm_service.edo.schemas import (
     EdoEntryMatch,
     EdoParseResult,

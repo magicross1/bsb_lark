@@ -12,14 +12,14 @@ from app.repository.export_ import ExportRepository
 from app.repository.import_ import ImportRepository
 from app.repository.warehouse_address import WarehouseAddressRepository
 from app.repository.warehouse_deliver_config import WarehouseDeliverConfigRepository
-from app.service.model.cartage_writeback_config import (
+from app.service.cartage.model.cartage_writeback_config import (
     OP_CARTAGE_EXPORT_RULES,
     OP_CARTAGE_IMPORT_RULES,
     OP_EXPORT_RULES,
     OP_IMPORT_RULES,
     WritebackFieldRule,
 )
-from app.service.model.cartage_writeback_schemas import (
+from app.service.cartage.model.cartage_writeback_schemas import (
     CartageWritebackResult,
     SkippedContainer,
     WritebackRecordRef,

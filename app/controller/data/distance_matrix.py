@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from app.common.response import ApiResponse
-from app.service.distance_matrix import distance_matrix_service as service
+from app.service.master.distance_matrix import distance_matrix_service as service
 
 router = APIRouter()
 

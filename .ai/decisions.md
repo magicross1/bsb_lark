@@ -72,5 +72,11 @@
 **备选方案**: 创建新记录、在 Op-Cartage 上写 EDO 字段
 **原因**: EDO 是进口柜的补充信息，Op-Import 已由 Cartage 流程创建；UPDATE 比 CREATE 避免数据分裂；Record Status 防止重复处理
 
+### [2026-04-21] VBS Patrick VIC 用多候选 regex 而非 operation 分支
+**背景**: Patrick VIC 的 VBS HTML 使用不同的 form 前缀 (`MovementDetailsForm` vs `ContainerVesselDetailsForm`) 和不同字段名 (`ContainerAvailability` vs `ImportAvailability`, `ContainerStorageStart` vs `ImportStorageDate`)
+**决定**: `_CTNS_REGEX_PATTERNS` 每个字段配多个候选 pattern，按顺序尝试取第一个匹配
+**备选方案**: 按 operation 传参到 `_parse_ctn_info` 用不同 pattern 集；解析前检测 HTML 前缀
+**原因**: 多候选 pattern 零分支、零传参，新增码头只需追加 pattern 到列表末尾；`_extract_by_regex` 天然支持 fallback
+
 ---
-*最后更新: 2026-04-15*
+*最后更新: 2026-04-21*

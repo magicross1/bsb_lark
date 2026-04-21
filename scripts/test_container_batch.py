@@ -1,0 +1,20 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+
+sys.stdout.reconfigure(encoding='utf-8')
+
+from app.service.sync.container_sync import ContainerSyncService
+
+
+async def main():
+    svc = ContainerSyncService()
+
+    result = await svc.sync_batch(condition="basic", limit=10)
+    print(json.dumps(result.model_dump(), indent=2, default=str))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

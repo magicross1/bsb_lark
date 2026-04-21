@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from app.common.response import ApiResponse
-from app.service.freight_forwarder import freight_forwarder_service as service
+from app.service.master.freight_forwarder import freight_forwarder_service as service
 
 router = APIRouter()
 

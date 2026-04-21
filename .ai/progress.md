@@ -3,7 +3,7 @@
 > 项目开发进度日志。AI 从这里知道"做到哪了"。
 
 ## Current Sprint / Phase
-EDO 解析+匹配+写回完成，Cartage trigger 地址匹配验证通过
+Sync 三模块统一重构完成 — BatchCondition write_fields 模式
 
 ## Changelog
 
@@ -378,3 +378,326 @@ EDO 解析+匹配+写回完成，Cartage trigger 地址匹配验证通过
 - EDO PDF 解析+匹配: Shipping Line / Empty Park 正确匹配 ✅
 - EDO trigger E2E: 解析+匹配+写回逻辑正确 ✅
 - Cartage 地址匹配: UNIT 3/222 Woodpark Rd → score=1.0, Consingee=HF IMPERIAL INTERNATIONAL, Deliver Config=STD ✅
+
+### [2026-04-16] 同事合并 — Writeback 移入 Service + 码头爬虫 Provider + RelationLoader
+**变更来源**: 同事 3 个 commit (e62350d, 51989c6, 69a2103)
+
+**架构调整**:
+- **Writeback 从 llm_service 移入 CartageService** — `CartageWritebackService` 整类删除，逻辑 (+322 行) 合并到 `app/service/cartage.py`
+  - `writeback_config.py` → `app/service/model/cartage_writeback_config.py`
+  - `writeback_schemas.py` → `app/service/model/cartage_writeback_schemas.py`
+  - `llm_service.py` 删除 `CartageWritebackService` 依赖，改为 `self._cartage.writeback()` / `self._cartage.writeback_from_record()`
+  - CartageService 用 `TYPE_CHECKING` 延迟 import `CartageProcessResult` 规避循环依赖
+
+**新增文件**:
+- `app/common/relation_loader.py` — `RelationLoader` + `RelationConfig`，批量关联字段解析，消除 N+1 串行调用
+- `app/component/VbsSearchProvider.py` (679 行) — VBS 码头查询爬虫 (集装箱可用性/ETA/Storage Date)
+- `app/component/HutchisonPortsProvider.py` (489 行) — Hutchison Ports 爬虫 (import availability/match pin)
+- `app/component/OneStopProvider.py` (361 行) — 1-Stop 爬虫 (集装箱信息/海关货物状态/空箱归还)
+- `app/component/ContainerChainProvider.py` (334 行) — ContainerChain 爬虫 (import/export 集装箱信息)
+- `app/component/__init__.py`
+- `app/service/model/__init__.py`
+
+**其他**:
+- `CLAUDE.MD` 新增规则: "使用中文回复 代码注释也使用中文"
+
+**待关注问题**:
+1. CartageService import CartageProcessResult（来自 llm_service 子包）造成逻辑上的反向依赖，TYPE_CHECKING 只是编译期规避
+2. 4 个 Component Provider 无统一基类/接口，各自独立实现
+3. ContainerChainProvider 硬编码账号密码 (第 48-49 行)
+4. 新增依赖 (beautifulsoup4, lxml, pytz) 可能未在 pyproject.toml 声明
+
+### [2026-04-17] VesselSync Controller 更新 + OneStopProvider load_terminal_mapping 修复
+**做了什么**:
+- **Controller 更新** — `app/controller/sync/vessel.py` 替换旧的 `sync_pending()` 为新的声明式端点:
+  - `GET /sync/vessel/conditions` — 列出所有可用的批量同步条件
+  - `POST /sync/vessel/batch` — 接受 `VesselBatchSyncRequest` 请求体 (condition/base_node/limit)
+  - `POST /sync/vessel/single` — 单条同步 (保留不变)
+- **修复 OneStopProvider 缺失函数** — `_parse_match_containers_info` 引用 `load_terminal_mapping` 但该函数不存在
+  - 新增 `app/common/relation_loader.py:load_terminal_mapping()` — 从 MD-Terminal 加载 {Terminal Full Name: {"Depot": depot}} 映射，模块级缓存
+  - `_parse_match_containers_info` 改为接受 `terminal_mapping` 参数，不再内部 import
+  - `match_containers_info_by_list` 在调用前预加载 terminal_mapping 并传入
+
+**下一步**:
+- 批量同步 E2E 测试 (sync_batch 各种 condition)
+- 更多 Component 爬虫集成 (VBS/Hutchison/ContainerChain service + controller)
+- Provider 统一接口抽象
+- 账号密码配置化
+
+### [2026-04-19] 港口数据同步 (Port Data Sync) + Bug 修复
+**做了什么**:
+- **HutchisonPortsProvider 代理修复** — `_PROXY` 从 `"http://127.0.0.1:7890"` 改为 `None`（用户本地无代理）
+- **ContainerSyncService.sync 改为 batch_update_records** — 原来 `sync` 方法逐条 `update_record`，现改为批量查 record_id + `batch_update_records` + 回退逐条，与 `sync_batch` 对齐
+- **Op-Import 缺失字段补齐** — lark_tables.py 新增 5 个字段映射:
+  - `on_board_vessel` (fldMoSJMeC, ON_BOARD_VESSEL)
+  - `discharge` (fld1RJa0Ji, DISCHARGE)
+  - `gateout` (fldELjpWia, GATEOUT)
+  - `quarantine` (fldLWaEpR3, Quarantine)
+  - `clear_status` (fld7OEef4K, Clear Status)
+- **PortDataSyncService 完整实现** — 港口数据同步服务，支持 3 个 Provider 数据源:
+  - `sync_customs()` — 1-Stop customs_cargo_status_search → Clear Status + Quarantine
+  - `sync_hutchison()` — HutchisonPorts container_enquiry_by_list → Clear Status + ISO + Gross Weight + Quarantine
+  - `sync_all()` — 合并所有 Provider，同字段取第一个有值的
+  - 声明式 `PortDataFieldMapping` 配置驱动，与 ContainerSyncService 同模式
+  - batch_update_records + 回退逐条写回
+- **Controller 端点**:
+  - `POST /sync/customs` — 清关状态同步
+  - `POST /sync/hutchison` — Hutchison 集装箱查询同步
+  - `POST /sync/port-data` — 合并所有 Provider 同步
+- **Gross Weight number 修复** — ContainerSyncService 的 Gross Weight 映射缺少 `field_type="number"`，导致字符串写入 number 字段；`_build_update_fields` 新增 `number` 分支
+
+**E2E 验证**:
+- Hutchison sync: OOCU9024853 → Clear Status=RELEASED, ISO=45G0, Gross Weight=10.92, Quarantine=Not Found ✅
+- Port-data (合并): TGBU4369245 → 4 个字段写回成功 ✅
+- Bitable 数据确认: Clear Status / ISO / Gross Weight / Quarantine 均正确持久化 ✅
+
+**待完成**:
+- VbsSearchProvider / ContainerChainProvider 集成
+- 4 个 Provider 统一接口抽象
+- 账号密码配置化
+
+### [2026-04-20] Clear 模块重构 + 批量同步 + Sync 规范固化
+**做了什么**:
+- **PortData → Clear 重构** — 删除 3 个旧端点 (customs/hutchison/port-data)，合并为单一 `POST /sync/clear`
+  - 请求体: `{ container_numbers, terminal_full_name }`
+  - `terminal_full_name` 为空 → 先 1-Stop customs，无数据 fallback Hutchison
+  - 非 HUTCHISON PORTS - PORT BOTANY → 只调 1-Stop customs
+  - HUTCHISON PORTS - PORT BOTANY → 只调 Hutchison
+  - 返回中含 `provider` 字段标识数据来源
+- **Clear 批量同步** — `POST /sync/clear/batch`
+  - 声明式 `ClearBatchCondition`：`pending`（Terminal 不为空 + Clear Status 非终态）/ `all`
+  - 终态列表: `CLEAR`, `UNDERBOND APPROVAL`, `RELEASED`
+  - `sync_batch` 按 Provider 分组：Hutchison 码头记录一组，其他码头记录一组，各组独立查+写回
+- **Sync Module 三步模式固化** — 写入 AGENTS.md 和 architecture.md，作为后续所有爬虫同步模块的强规范
+  - 步骤 1: 数据来源（手动传入 / 声明式 BatchCondition 自动筛选）
+  - 步骤 2: 调 Provider 拿数据（单 Provider / 多 Provider 路由）
+  - 步骤 3: 批量写回 Bitable（batch_update_records + 回退逐条 + 声明式 FieldMapping）
+  - 文件结构模板: `service/sync/{module}.py` + `service/sync/model/{module}_schemas.py` + `controller/sync/{module}.py`
+
+**E2E 验证**:
+- Hutchison terminal: OOCU9024853 → provider=Hutchison, Clear Status+Quarantine ✅
+- 非 Hutchison terminal: → provider=1-Stop customs ✅
+- 空 terminal fallback: → provider=Hutchison (1-Stop 无数据后 fallback) ✅
+- 批量 pending: 4 条记录，3 条 1-Stop + 1 条 Hutchison，全部同步成功 ✅
+
+### [2026-04-20] BitableQuery 统一重构 — 去除 filter_fn 双轨制
+**做了什么**:
+- **重写 BitableQuery** — 每个子句同时存储 `filter_expr`(服务端) 和 `predicate`(客户端)
+  - `build()` → 生成服务端 filter_expr（预筛选，减少数据拉取）
+  - `filter(records)` → 客户端 Python 精筛（保证正确性，处理 Bitable 无法表达的条件如 `ETA < now()`）
+  - 新增 `.client_filter(predicate)` — 纯客户端筛选条件（无服务端 filter_expr 对应）
+  - 新增 `.raw(expr, predicate?)` — 支持附带可选客户端判断
+  - 新增 `.has_client_filter()` — 判断是否存在客户端筛选
+  - 所有链式方法（eq/ne/not_empty/is_empty/not_in/in_list/gt/gte/lt/lte）同时生成 expr + predicate
+- **重构 BatchCondition** — 去掉 `filter_fn` 字段，BitableQuery 成为唯一条件定义机制
+  - 新增 `query_fn: Callable[[], BitableQuery]` — 动态工厂，用于需要运行时值（如 `now()`）的条件
+  - `query`(静态) 和 `query_fn`(动态) 二选一，`query_fn` 优先
+  - 新增 `get_query()` 方法统一获取 BitableQuery
+- **更新 VesselSyncService**:
+  - `pending_arrival` 改用 `raw('OR(NOT CurrentValue.[Actual Arrival], AND(...))')` 正确处理空值
+  - 删除 `_actual_arrival_not_confirmed` 函数和 `filter_fn` 字段
+  - `sync_batch` 改为 `query = cond.get_query()` + `query.filter(all_records)`
+- **更新 ContainerSyncService**:
+  - `discharge` 和 `gateout` 改用 `query_fn` 工厂 + `.client_filter(_eta_passed_predicate)`
+  - 删除 `_has_text` / `_not_has_text` / `_discharge_check` / `_gateout_check` 函数和 `filter_fn` 字段
+  - `sync_batch` 统一用 `query.filter(all_records)`
+- **更新 ClearSyncService**:
+  - `ClearBatchCondition` 对齐新结构（新增 query_fn + get_query）
+  - `sync_batch` 统一用 `query.filter(all_records)`
+- **更新 AGENTS.md** — Sync Module 关键约束重写，明确禁止 `filter_fn` 双轨制
+
+**设计原则**:
+- 服务端 filter_expr 是"尽力预筛"——减少数据拉取量，但不保证 100% 精确（如空值处理差异）
+- 客户端 filter 是"精确保证"——对所有返回记录做最终验证
+- `not_in("Clear Status", [...])` 的 filter_expr 不匹配空值，但 client predicate 包含空值——两阶段互补
+
+### [2026-04-20] BitableQuery 实测 + NOT 语法修复 + Controller conditions 端点
+**做了什么**:
+- **重大发现：Bitable 不支持 `NOT` 运算符** — `NOT CurrentValue.[Field]` 返回 `InvalidFilter`
+  - "为空"必须用 `CurrentValue.[Field]=""`
+  - "非空"必须用 `CurrentValue.[Field]!=""`
+- **修正 BitableQuery**:
+  - `is_empty` → `CurrentValue.[Field]=""`（原来用 `NOT CurrentValue.[Field]`）
+  - `not_empty` → `CurrentValue.[Field]!=""`（原来用 `CurrentValue.[Field]`，部分场景返回 0 记录）
+  - `not_in` / `in_list` 的 predicate 修复 None 安全（`extract_cell_text` 可能返回 None）
+- **修正所有 raw() 表达式** — Container 的 `basic`/`terminal`/`vessel_schedule` 中 `NOT CurrentValue.[X]` 改为 `CurrentValue.[X]=""`
+- **修正 Vessel `pending_arrival`** — `OR(NOT ...)` 改为 `OR(CurrentValue.[Actual Arrival]="", AND(...))`
+- **新增 3 个 conditions 端点** — `GET /sync/vessel/conditions`, `GET /sync/container/conditions`, `GET /sync/clear/conditions`
+
+**E2E 测试结果（全部通过）**:
+
+| 端点 | 条件 | total | synced | errors |
+|------|------|-------|--------|--------|
+| `POST /sync/vessel/batch` | pending_arrival | 0 | 0 | 0 |
+| `POST /sync/vessel/batch` | missing_eta | 0 | 0 | 0 |
+| `POST /sync/vessel/batch` | all | 4 | 4 | 0 |
+| `POST /sync/container/batch` | basic | 8 | 8 | 0 |
+| `POST /sync/container/batch` | terminal | 0 | 0 | 0 |
+| `POST /sync/container/batch` | vessel_schedule | 0 | 0 | 0 |
+| `POST /sync/container/batch` | discharge | 0 | 0 | 0 |
+| `POST /sync/container/batch` | gateout | 0 | 0 | 0 |
+| `POST /sync/container/batch` | all | 8 | 8 | 0 |
+| `POST /sync/clear/batch` | pending | 1 | 1 | 0 |
+| `POST /sync/clear/batch` | all | 8 | 8 | 0 |
+| `POST /sync/vessel` (单条) | recvh3COKI3bzQ | - | 1 | 0 |
+| `POST /sync/container` (单条) | OOCU9024853 | 1 | 1 | 0 |
+| `POST /sync/clear` (单条) | OOCU9024853 Hutchison | 1 | 1 | 0 |
+
+**Bitable filter_expr 语法备忘**:
+- ✅ `CurrentValue.[Field]="value"` / `CurrentValue.[Field]!="value"`
+- ✅ `CurrentValue.[Field]=""` (为空) / `CurrentValue.[Field]!=""` (非空)
+- ✅ `AND(...)`, `OR(...)` 嵌套
+- ❌ `NOT CurrentValue.[Field]` — InvalidFilter
+- ❌ `CurrentValue.[Field] = null` / `is null` — InvalidFilter
+
+### [2026-04-20] BitableQuery 统一重构 — 语义化 + 去除 query_fn/raw
+**做了什么**:
+- **BitableQuery 新增组合条件方法**:
+  - `any_empty(fields)` — 任一字段为空 → `OR(f1="", f2="", ...)`
+  - `not_in_or_empty(field, values)` — 字段为空或不在列表中 → `OR(field="", AND(field!="v1", ...))`
+- **统一 BatchCondition 结构** — 三个 sync service 一致: `name + description + query + required_fields`
+  - 去掉 `query_fn`（`client_filter` 的 lambda 延迟执行，不需要工厂）
+  - 去掉 `raw()` 调用（全部用 `any_empty` / `not_in_or_empty` 语义化方法）
+  - 去掉 `get_query()` 方法（直接用 `cond.query`）
+- **Container 条件复用提取** — `_vessel_info_present()` / `_terminal_info_present()` 工厂函数
+- **Clear pending 改用 `not_in_or_empty`** — 服务端 filter 正确包含 Clear Status 为空的记录
+- **修复模块级 BitableQuery 共享可变状态** — 改为工厂函数，每次创建新实例
+
+**E2E 测试结果（全部通过）**:
+
+| 端点 | 条件 | total | synced | errors |
+|------|------|-------|--------|--------|
+| `POST /sync/vessel/batch` | pending_arrival | 4 | 4 | 0 |
+| `POST /sync/vessel/batch` | missing_eta | 0 | 0 | 0 |
+| `POST /sync/vessel/batch` | all | 4 | 4 | 0 |
+| `POST /sync/container/batch` | basic | 8 | 8 | 0 |
+| `POST /sync/container/batch` | terminal | 0 | 0 | 0 |
+| `POST /sync/container/batch` | vessel_schedule | 0 | 0 | 0 |
+| `POST /sync/container/batch` | discharge | 0 | 0 | 0 |
+| `POST /sync/container/batch` | gateout | 0 | 0 | 0 |
+| `POST /sync/container/batch` | all | 8 | 8 | 0 |
+| `POST /sync/clear/batch` | pending | 7 | 7 | 0 |
+| `POST /sync/clear/batch` | all | 8 | 8 | 0 |
+
+### [2026-04-20] Sync 三模块统一 — BatchCondition write_fields 重构完成
+**做了什么**:
+- **VesselSyncService 重构** — `BatchCondition` 改为 `name + description + query + write_fields`，去掉 `required_fields`
+  - 每个条件配独立 `write_fields: list[FieldMapping]`，不同条件写回不同字段集
+  - 写回字段按语义分组: `_DATETIME_FIELDS`(6个时间字段) + `_ACTUAL_ARRIVAL`(text) + `_TERMINAL_NAME`(link)
+  - 条件定义加中文注释: 筛选规则 + 写回字段
+- **ContainerSyncService 重构** — 同样结构，6个条件每个配独立 `write_fields`
+  - 写回字段按语义分组: `_VESSEL_INFO` / `_TERMINAL_INFO` / `_SCHEDULE_INFO` / `_CARGO_INFO` / `_ON_BOARD` / `_DISCHARGE` / `_GATEOUT`
+  - basic=全量 / terminal=去船舶 / vessel_schedule=去码头 / discharge=仅卸船+提柜 / gateout=仅提柜 / all=全量
+  - `sync()` 手动触发也使用 `cond.write_fields`（用 "all" 条件的字段集）
+- **ClearSyncService 重构** — `ClearBatchCondition` 新增 `write_fields: dict[str, list[ClearFieldMapping]]`
+  - 清关特点：不同 Provider 返回不同字段，所以 `write_fields` 按 Provider 名称分组
+  - 1-Stop customs → Clear Status + Quarantine
+  - Hutchison → Clear Status + Quarantine + ISO + Gross Weight (number)
+  - `sync_batch` 按 Terminal 分组后，从 `cond.write_fields[provider_name]` 取对应的字段映射
+  - `sync()` 手动触发也使用 `CLEAR_BATCH_CONDITIONS["all"].write_fields`
+  - 去掉 `required_fields`，`list_all_records` 不再限制 `field_names`（与 vessel/container 一致）
+  - 删除顶层 `ONESTOP_CUSTOMS_MAPPINGS` / `HUTCHISON_CLEAR_MAPPINGS` 常量（已内聚到条件定义中）
+
+**E2E 测试结果（全部通过）**:
+
+| 端点 | 条件 | total | synced | errors |
+|------|------|-------|--------|--------|
+| `POST /sync/vessel/batch` | all | 4 | 4 | 0 |
+| `POST /sync/container/batch` | basic | 8 | 8 | 0 |
+| `POST /sync/clear/batch` | pending | 0 | 0 | 0 |
+| `POST /sync/clear/batch` | all | 8 | 3 | 0 |
+
+**三个 Sync 模块现已完全统一**:
+- `BatchCondition(name, description, query, write_fields)` — Clear 的 `write_fields` 是 `dict[str, list]`（按 Provider 分组），Vessel/Container 是 `list`（单 Provider）
+- 每个条件一眼看出"筛什么"+"写什么"
+- 中文注释覆盖所有条件定义
+
+### [2026-04-20] Sync 全面重构 — 全局字段类型 + LinkConfig + 共享逻辑
+**做了什么**:
+- **新增 `app/common/bitable_fields.py`** — 全局 Bitable 字段类型注册表
+  - 每个字段类型只定义一次，所有模块共享
+  - `get_field_type(field_name)` 自动解析类型
+  - FieldMapping 不再需要 `field_type` 参数，从注册表自动推导
+- **新增 `app/service/sync/base.py`** — Sync 模块共享类型与逻辑
+  - `LinkConfig(table, search_field)` — 关联字段配置，只需指定目标表 + 搜索字段，自动查找 record_id
+  - `LinkResolver` — 通用关联字段解析器，缓存 + 自动查找，复用 DynamicRepo 模式
+  - `FieldMapping(provider_key, bitable_field, link=)` — link 非空时自动解析，field_type 强制为 "link"
+  - `BatchCondition` / `MultiProviderBatchCondition` — 统一条件类型
+  - `build_update_fields()` — 共享字段构建，自动处理 text/number/datetime/link/select
+  - `batch_write_back()` — 共享批量写回 + 逐条回退
+  - `parse_datetime_to_timestamp()` — 共享日期解析
+- **重构 vessel_sync.py**:
+  - Terminal Name 改用 `LinkConfig(table=T.md_terminal, search_field="Terminal Full Name")`，删除自定义 `_find_terminal_by_full_name`
+  - 删除本地 `FieldMapping` / `BatchCondition` 定义，改用 base 共享类型
+  - 删除本地 `_build_update_fields` / `_batch_write_back` / `_parse_datetime_to_timestamp`
+  - 删除 `TerminalRepository` 依赖（LinkResolver 自动处理）
+- **重构 container_sync.py**:
+  - 删除本地 `FieldMapping` / `BatchCondition` 定义，改用 base 共享类型
+  - 删除本地 `_build_update_fields` / `_batch_write_back` / `_parse_datetime_to_timestamp`
+- **重构 clear_sync.py**:
+  - 删除本地 `ClearFieldMapping` / `ClearBatchCondition` 定义，改用 base 的 `FieldMapping` / `MultiProviderBatchCondition`
+  - 删除本地 `_build_update_fields` / `_batch_write_back`
+
+**核心设计**:
+1. **字段类型全局注册** — `bitable_fields.py` 一个地方定义所有字段类型，FieldMapping 不再重复声明 field_type
+2. **LinkConfig 配置驱动** — 只需 `LinkConfig(table=T.md_terminal, search_field="Terminal Full Name")`，不再写自定义查询代码
+3. **三个模块共享 build_update_fields + batch_write_back** — 不再每个 service 重复实现
+
+**E2E 测试结果（全部通过）**:
+
+| 端点 | 条件 | total | synced | errors |
+|------|------|-------|--------|--------|
+| `POST /sync/vessel/batch` | all | 4 | 4 | 0 |
+| `POST /sync/container/batch` | basic | 10 | 8 | 0 |
+| `POST /sync/clear/batch` | all | 10 | 3 | 0 |
+
+### [2026-04-21] OverwritePolicy — 字段覆盖策略
+**做了什么**:
+- **OverwritePolicy 枚举** — `base.py` 新增三种覆盖策略:
+  - `ALWAYS` — Provider 有值就覆盖（适合会变化的字段如 Status）
+  - `NON_EMPTY` — Provider 返回空值时不覆盖（默认，安全策略）
+  - `ONCE` — Bitable 已有值就不覆盖（适合"一旦确定就不变"的字段如日期），需传 `existing_fields`
+- **FieldMapping 新增 `overwrite` 字段** — 默认 `NON_EMPTY`
+- **build_update_fields 支持三种策略**:
+  - ONCE: 检查 `existing_fields` 中该字段是否已有值，有值跳过
+  - NON_EMPTY: Provider 返回空值时跳过
+  - ALWAYS: 即便空值也写入
+- **所有 sync 模块字段暂配 NON_EMPTY** — 后续可按字段语义调整（如 Clear Status 用 ALWAYS，日期类用 ONCE）
+
+### [2026-04-21] VBS 同步服务 — VbsSyncService
+**做了什么**:
+- **VbsSyncService 完整实现** — VBS 集装箱可用性同步，按 Terminal Full Name 路由到 VBS operation
+  - Terminal 路由映射 `_TERMINAL_TO_OPERATION`: DP WORLD NS/DP WORLD VI/PATRICK NS/PATRICK VI/VICTORIA INTERNATIONAL → 5 个 VBS operation
+  - `sync(container_numbers, terminal_full_name)` — 手动触发
+  - `sync_batch(condition)` — 批量触发，按 operation 分组后各组独立查+写回
+- **MultiProviderBatchCondition** — VBS 按 operation 分组写回字段（结构相同，按 operation 分组是为了支持多 Provider 扩展）
+  - `pending`: GATEOUT_Time 为空 + Terminal 可路由 → EstimatedArrival + ImportAvailability + StorageStartDate
+  - `all`: 全部可路由记录
+- **VBS Controller** — `POST /sync/vbs` + `POST /sync/vbs/batch` + `GET /sync/vbs/conditions`
+- **VbsSearchProvider._PROXY = None** — 修复代理问题
+- **VICTORIA INTERNATIONAL CONTAINER TERMINAL 映射修复** — 去掉 "LIMITED"
+
+**E2E 验证** (pending 条件):
+- 10 条待处理记录，9 条成功同步 (1 条 VBS 无数据) ✅
+- EstimatedArrival / ImportAvailability / StorageStartDate 正确写入 Bitable ✅
+
+### [2026-04-21] VBS Patrick VIC 字段适配
+**做了什么**:
+- **Patrick VIC VBS 页面使用不同 HTML 结构** — 字段在 `MovementDetailsForm` 前缀下（其他码头用 `ContainerVesselDetailsForm`）：
+  - ImportAvailability → `MovementDetailsForm___CONTAINERAVAILABILITY`（Patrick VIC 叫 "Container Availability"）
+  - StorageStartDate → `MovementDetailsForm___CONTAINERSTORAGESTART`（Patrick VIC 叫 "Storage Start"，依旧 -1 小时）
+  - EstimatedArrival → `MovementDetailsForm___ESTIMATEDARRIVALDATE`（Patrick VIC 也在此前缀下）
+- **`_CTNS_REGEX_PATTERNS` 多候选 pattern** — 每个字段按优先级配多个候选 regex：
+  - EstimatedArrival: `ContainerVesselDetailsForm___ESTIMATEDARRIVALDATE` → `MovementDetailsForm___ESTIMATEDARRIVALDATE`
+  - ImportAvailability: `ContainerVesselDetailsForm___IMPORTAVAILABILITY` → `MovementDetailsForm___CONTAINERAVAILABILITY`
+  - StorageStartDate: `ContainerVesselDetailsForm___IMPORTSTORAGEDATE` → `MovementDetailsForm___CONTAINERSTORAGESTART`
+- **`_normalize_ctn_dates` 支持带秒格式** — Patrick VIC 日期含秒（如 `19/04/2026 09:55:07`），之前 `strptime` 只匹配 `%d/%m/%Y %H:%M` 导致 ValueError→空字符串。改为依次尝试 `%d/%m/%Y %H:%M:%S` → `%d/%m/%Y %H:%M` → `%d/%m/%Y`
+
+**E2E 验证** (5 个码头全部 3 字段完整):
+- dpWorldNSW ✅ / patrickNSW ✅ / patrickVIC ✅ / dpWorldVIC ✅ / victVIC ✅
+- Patrick VIC: EstimatedArrival=2026-04-18 12:00, ImportAvailability=2026-04-19 09:55, StorageStartDate=2026-04-23 09:00
+
+**待完成**:
+1. ContainerChainProvider 集成
+2. 4 个 Provider 统一接口抽象
+3. 账号密码配置化

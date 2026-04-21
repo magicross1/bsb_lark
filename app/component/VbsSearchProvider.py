@@ -56,11 +56,24 @@ _NEW_SELECTED_MAPPING = {
 }
 
 # 集装箱查询页的正则匹配规则
-_CTN_REGEX_PATTERNS = {
-    "CTN NUMBER": r'id="ContainerDetailsForm___CONTAINERNUMBER"[^>]*>([^<]+)',
-    "EstimatedArrival": r'id="ContainerVesselDetailsForm___ESTIMATEDARRIVALDATE"[^>]*>([^<]+)',
-    "ImportAvailability": r'id="ContainerVesselDetailsForm___IMPORTAVAILABILITY"[^>]*>([^<]+)',
-    "StorageStartDate": r'id="ContainerVesselDetailsForm___IMPORTSTORAGEDATE"[^>]*>([^<]+)',
+# 默认 (ContainerVesselDetailsForm) + Patrick VIC 专用 (MovementDetailsForm)
+# Patrick VIC 的 ImportAvailability 叫 Container Availability, StorageStartDate 叫 Storage Start
+_CTNS_REGEX_PATTERNS: dict[str, list[str]] = {
+    "CTN NUMBER": [
+        r'id="ContainerDetailsForm___CONTAINERNUMBER"[^>]*>([^<]+)',
+    ],
+    "EstimatedArrival": [
+        r'id="ContainerVesselDetailsForm___ESTIMATEDARRIVALDATE"[^>]*>([^<]+)',
+        r'id="MovementDetailsForm___ESTIMATEDARRIVALDATE"[^>]*>([^<]+)',
+    ],
+    "ImportAvailability": [
+        r'id="ContainerVesselDetailsForm___IMPORTAVAILABILITY"[^>]*>([^<]+)',
+        r'id="MovementDetailsForm___CONTAINERAVAILABILITY"[^>]*>([^<]+)',
+    ],
+    "StorageStartDate": [
+        r'id="ContainerVesselDetailsForm___IMPORTSTORAGEDATE"[^>]*>([^<]+)',
+        r'id="MovementDetailsForm___CONTAINERSTORAGESTART"[^>]*>([^<]+)',
+    ],
 }
 
 
@@ -68,10 +81,15 @@ _CTN_REGEX_PATTERNS = {
 # 结果解析函数（原 VbsSearchResultMapper 中的逻辑）
 # ------------------------------------------------------------------
 
-def _extract_by_regex(content, pattern):
-    """从 HTML 内容中按正则提取第一个匹配组"""
-    match = re.search(pattern, content)
-    return match.group(1).strip() if match else ""
+def _extract_by_regex(content, patterns):
+    """从 HTML 内容中按正则提取，支持多个候选 pattern，依次尝试取第一个匹配"""
+    if isinstance(patterns, str):
+        patterns = [patterns]
+    for pattern in patterns:
+        match = re.search(pattern, content)
+        if match and match.group(1).strip():
+            return match.group(1).strip()
+    return ""
 
 
 def _normalize_ctn_dates(result_dict):
@@ -81,13 +99,26 @@ def _normalize_ctn_dates(result_dict):
             continue
         try:
             if key == "StorageStartDate":
-                # 只有日期，减去一小时
-                dt = datetime.strptime(result_dict[key], "%d/%m/%Y")
-                result_dict[key] = (dt - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+                for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+                    try:
+                        dt = datetime.strptime(result_dict[key], fmt)
+                        result_dict[key] = (dt - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    result_dict[key] = ""
             else:
-                dt = datetime.strptime(result_dict[key], "%d/%m/%Y %H:%M")
-                result_dict[key] = dt.strftime("%Y-%m-%d %H:%M")
-        except ValueError:
+                for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
+                    try:
+                        dt = datetime.strptime(result_dict[key], fmt)
+                        result_dict[key] = dt.strftime("%Y-%m-%d %H:%M")
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    result_dict[key] = ""
+        except Exception:
             result_dict[key] = ""
     return result_dict
 
@@ -122,7 +153,7 @@ def _parse_ctn_info(raw_html_list):
         if e.get("Content") == "Container not found." or e.get("Result") != "true":
             continue
         content = e["Content"]
-        row = {key: _extract_by_regex(content, pattern) for key, pattern in _CTN_REGEX_PATTERNS.items()}
+        row = {key: _extract_by_regex(content, pattern) for key, pattern in _CTNS_REGEX_PATTERNS.items()}
         row = _normalize_ctn_dates(row)
         if row.get("CTN NUMBER"):
             result[row["CTN NUMBER"]] = row
@@ -245,7 +276,7 @@ class VbsSearchProvider:
     _instance = None
     _USERNAME = "bsbtransport"
     _PASSWORD = "Cpy19871230"
-    _PROXY = "http://127.0.0.1:7890"
+    _PROXY = None
 
     def __new__(cls):
         if cls._instance is None:

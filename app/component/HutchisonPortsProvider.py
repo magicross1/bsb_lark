@@ -97,7 +97,7 @@ class HutchisonPortsProvider:
     _BASE_URL = 'https://www.hpaportal.com.au/HPAPB'
     _USERNAME = "admin@bsbtransport.com.au"
     _PASSWORD = "Cpy19871230"
-    _PROXY = "http://127.0.0.1:7890"
+    _PROXY = None
 
     def __new__(cls):
         if cls._instance is None:

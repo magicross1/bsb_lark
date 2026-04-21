@@ -420,6 +420,7 @@ class _Tables:
             "first_free": FieldRef("fldMokJg6H", "First Free"),
             "eta": FieldRef("fldsCD2Y6D", "ETA"),
             "full_vessel_name": FieldRef("fldadZy1SU", "FULL Vessel Name"),
+            "live_port_data": FieldRef("fldxC3ljVW", "Live Port Data"),
         },
     )
 
@@ -449,10 +450,15 @@ class _Tables:
             "in_voyage": FieldRef("fldeOtdPuE", "InVoyage"),
             "last_free": FieldRef("fld5xRtaq8", "Last Free"),
             "on_board_vessel_time": FieldRef("fldpgV4MeC", "ON_BOARD_VESSEL_Time"),
+            "on_board_vessel": FieldRef("fldMoSJMeC", "ON_BOARD_VESSEL"),
             "discharge_time": FieldRef("fldafQLMw2", "DISCHARGE_Time"),
+            "discharge": FieldRef("fld1RJa0Ji", "DISCHARGE"),
             "estimated_arrival": FieldRef("fldzxIVjfb", "EstimatedArrival"),
             "port_of_discharge": FieldRef("flddSwmxQh", "PortOfDischarge"),
             "gateout_time": FieldRef("fldD3FIVbO", "GATEOUT_Time"),
+            "gateout": FieldRef("fldELjpWia", "GATEOUT"),
+            "quarantine": FieldRef("fldLWaEpR3", "Quarantine"),
+            "clear_status": FieldRef("fld7OEef4K", "Clear Status"),
             "record_status": FieldRef("fldEwvsGtt", "Record Status"),
             "source_edo": FieldRef("fldgijIfl5", "Source EDO"),
         },

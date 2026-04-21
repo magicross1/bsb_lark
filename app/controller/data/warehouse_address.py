@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
 from app.common.response import ApiResponse
-from app.service.warehouse_address import warehouse_address_service as service
+from app.service.master.warehouse_address import warehouse_address_service as service
 
 router = APIRouter()
 
