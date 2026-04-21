@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.common.lark_repository import LarkRepository
+from app.common.lark_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class LinkLookup:
     create_if_missing: bool = False
     create_fields: dict[str, str] = field(default_factory=dict)
     create_links: dict[str, NestedLink] = field(default_factory=dict)
-    filter_expr: str | None = None
+    filter_conditions: list[tuple[str, str]] = field(default_factory=list)
     sort_field: str | None = None
     sort_desc: bool = False
     default_if_missing: str | None = None
@@ -30,13 +30,13 @@ class LinkLookup:
 
 class LinkFieldResolver:
     def __init__(self) -> None:
-        self._repo_cache: dict[str, LarkRepository] = {}
+        self._repo_cache: dict[str, BaseRepository] = {}
         self._resolve_cache: dict[str, list[str]] = {}
 
     def _cache_key(self, lookup: LinkLookup, value: str, context: dict[str, Any] | None) -> str:
         extra = ""
-        if lookup.filter_expr and context:
-            extra = lookup.filter_expr.format_map({**context, "value": value})
+        if lookup.filter_conditions and context:
+            extra = "|".join(f"{fn}={context.get(ck, '')}" for fn, ck in lookup.filter_conditions)
         return f"{lookup.target_table_id}|{lookup.search_field}={value}|{extra}"
 
     async def resolve(
@@ -68,7 +68,7 @@ class LinkFieldResolver:
 
         if lookup.create_if_missing:
             fields = await self._build_create_fields(lookup, value, context)
-            created = await repo.create_record(fields)
+            created = await repo.createOne(fields)
             rid = created["record_id"]
             logger.info("Link resolved: %s=%s → created %s", lookup.search_field, value, rid)
             result = [rid]
@@ -84,18 +84,18 @@ class LinkFieldResolver:
 
     async def _find_existing(
         self,
-        repo: LarkRepository,
+        repo: BaseRepository,
         lookup: LinkLookup,
         value: str,
         ctx: dict[str, Any],
     ) -> dict[str, Any] | None:
-        primary = f'CurrentValue.[{lookup.search_field}]="{value}"'
-        if lookup.filter_expr:
-            rendered = lookup.filter_expr.format_map(ctx)
-            combined = f"AND({primary}, {rendered})"
-            records, _ = await repo.list_records(filter_expr=combined, page_size=1)
-            return records[0] if records else None
-        return await repo.find_record(lookup.search_field, value)
+        from app.common.query_wrapper import QueryWrapper
+        q = QueryWrapper().eq(lookup.search_field, value)
+        for field_name, ctx_key in lookup.filter_conditions:
+            ctx_value = ctx.get(ctx_key, "")
+            if ctx_value:
+                q = q.eq(field_name, str(ctx_value))
+        return await repo.findOne(q)
 
     async def _build_create_fields(
         self,
@@ -123,10 +123,10 @@ class LinkFieldResolver:
 
         return fields
 
-    def _get_repo(self, table_id: str) -> LarkRepository:
+    def _get_repo(self, table_id: str) -> BaseRepository:
         if table_id not in self._repo_cache:
 
-            class _DynamicRepo(LarkRepository):
+            class _DynamicRepo(BaseRepository):
                 pass
 
             _DynamicRepo.table_id = table_id

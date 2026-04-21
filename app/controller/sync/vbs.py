@@ -5,8 +5,9 @@ import logging
 from fastapi import APIRouter
 
 from app.common.response import ApiResponse
-from app.service.sync.model.vbs_sync_schemas import VbsBatchSyncRequest, VbsSyncRequest
-from app.service.sync.vbs_sync import VbsSyncService
+from app.service.sync.request.vbs_batch_sync_request import VbsBatchSyncRequest
+from app.service.sync.request.vbs_sync_request import VbsSyncRequest
+from app.service.sync.scene.vbs.vbs_sync_service import VbsSyncService
 
 logger = logging.getLogger(__name__)
 

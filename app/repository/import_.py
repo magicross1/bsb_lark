@@ -5,11 +5,11 @@ from pathlib import Path
 
 import httpx
 
-from app.common.lark_repository import LarkRepository
+from app.common.lark_repository import BaseRepository
 from app.common.lark_tables import T
 
 
-class ImportRepository(LarkRepository):
+class ImportRepository(BaseRepository):
     table_id = T.op_import.id
 
     async def _get_tenant_token(self) -> str:

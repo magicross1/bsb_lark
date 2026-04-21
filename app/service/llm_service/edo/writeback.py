@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+from app.common.query_wrapper import QueryWrapper
+from app.common.update_wrapper import UpdateWrapper
 from app.repository.import_ import ImportRepository
 from app.service.llm_service.edo.schemas import EdoEntryMatch, EdoProcessResult
 from app.service.llm_service.edo.writeback_schemas import EdoWritebackEntryRef, EdoWritebackResult
@@ -36,7 +38,7 @@ class EdoWritebackService:
                 )
                 continue
 
-            import_record = await self._import_repo.find_record("Container Number", entry.container_number)
+            import_record = await self._import_repo.findOne(QueryWrapper().eq("Container Number", entry.container_number))
 
             if not import_record:
                 skipped.append(
@@ -60,14 +62,14 @@ class EdoWritebackService:
             fields = self._build_edo_fields(entry, source_record_id)
 
             if import_record_id == source_record_id:
-                await self._import_repo.update_record(source_record_id, fields)
+                await self._import_repo.updateOne(UpdateWrapper().eq("record_id", source_record_id).set_all(fields))
                 logger.info(
                     "Updated source Op-Import %s for container %s",
                     source_record_id,
                     entry.container_number,
                 )
             else:
-                await self._import_repo.update_record(import_record_id, fields)
+                await self._import_repo.updateOne(UpdateWrapper().eq("record_id", import_record_id).set_all(fields))
                 logger.info(
                     "Updated Op-Import %s for container %s (from source %s)",
                     import_record_id,
@@ -85,7 +87,7 @@ class EdoWritebackService:
 
         if not first_used and updated:
             if not any(e.record_id == source_record_id for e in updated):
-                source_record = await self._import_repo.get_record(source_record_id)
+                source_record = await self._import_repo.findOne(QueryWrapper().eq("record_id", source_record_id))
                 source_cn = source_record.get("Container Number", "")
                 skipped.append(
                     EdoWritebackEntryRef(
@@ -96,12 +98,11 @@ class EdoWritebackService:
                 )
 
         if not updated:
-            await self._import_repo.update_record(
-                source_record_id,
-                {
-                    "Record Status": RECORD_STATUS_DUPLICATE,
-                    "Source EDO": [source_record_id],
-                },
+            await self._import_repo.updateOne(
+                UpdateWrapper()
+                .eq("record_id", source_record_id)
+                .set("Record Status", RECORD_STATUS_DUPLICATE)
+                .set("Source EDO", [source_record_id])
             )
             skipped.append(
                 EdoWritebackEntryRef(

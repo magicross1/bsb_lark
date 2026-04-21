@@ -15,21 +15,18 @@ router = APIRouter()
 async def list_distance_matrix(
     page_size: int = Query(default=100, le=500),
     page_token: str | None = Query(default=None),
-    filter_expr: str | None = Query(default=None),
 ) -> JSONResponse:
     records, next_token = await service.list_distance_matrix(
         page_size=page_size,
         page_token=page_token,
-        filter_expr=filter_expr,
     )
     return ApiResponse.ok(data={"records": records, "next_page_token": next_token})
 
 
 @router.get("/distance-matrix/all")
 async def list_all_distance_matrix(
-    filter_expr: str | None = Query(default=None),
 ) -> JSONResponse:
-    records = await service.list_all_distance_matrix(filter_expr=filter_expr)
+    records = await service.list_all_distance_matrix()
     return ApiResponse.ok(data={"records": records, "total": len(records)})
 
 

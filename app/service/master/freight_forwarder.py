@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.common.update_wrapper import UpdateWrapper
+from app.common.query_wrapper import QueryWrapper
+
 from typing import Any
 
 from app.core.base_service import BaseService
@@ -10,20 +13,20 @@ class FreightForwarderService(BaseService):
     def __init__(self, repository: FreightForwarderRepository | None = None) -> None:
         super().__init__(repository or FreightForwarderRepository())
 
-    async def list_freight_forwarders(self, **kwargs: Any) -> tuple[list[dict[str, Any]], str | None]:
-        return await self.repository.list_records(**kwargs)
+    async def list_freight_forwarders(self, *, page_size: int = 100, page_token: str | None = None) -> tuple[list[dict[str, Any]], str | None]:
+        return await self.repository.page(page_size=page_size, page_token=page_token)
 
-    async def list_all_freight_forwarders(self, **kwargs: Any) -> list[dict[str, Any]]:
-        return await self.repository.list_all_records(**kwargs)
+    async def list_all_freight_forwarders(self) -> list[dict[str, Any]]:
+        return await self.repository.list()
 
     async def create_freight_forwarder(self, fields: dict[str, Any]) -> dict[str, Any]:
-        return await self.repository.create_record(fields)
+        return await self.repository.createOne(fields)
 
     async def update_freight_forwarder(self, record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
-        return await self.repository.update_record(record_id, fields)
+        return await self.repository.updateOne(UpdateWrapper().eq("record_id", record_id).set_all(fields))
 
     async def delete_freight_forwarder(self, record_id: str) -> None:
-        await self.repository.delete_record(record_id)
+        await self.repository.deleteOne(QueryWrapper().eq("record_id", record_id))
 
 
 freight_forwarder_service = FreightForwarderService()

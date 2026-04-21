@@ -15,21 +15,18 @@ router = APIRouter()
 async def list_freight_forwarders(
     page_size: int = Query(default=100, le=500),
     page_token: str | None = Query(default=None),
-    filter_expr: str | None = Query(default=None),
 ) -> JSONResponse:
     records, next_token = await service.list_freight_forwarders(
         page_size=page_size,
         page_token=page_token,
-        filter_expr=filter_expr,
     )
     return ApiResponse.ok(data={"records": records, "next_page_token": next_token})
 
 
 @router.get("/freight-forwarders/all")
 async def list_all_freight_forwarders(
-    filter_expr: str | None = Query(default=None),
 ) -> JSONResponse:
-    records = await service.list_all_freight_forwarders(filter_expr=filter_expr)
+    records = await service.list_all_freight_forwarders()
     return ApiResponse.ok(data={"records": records, "total": len(records)})
 
 

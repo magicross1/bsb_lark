@@ -5,8 +5,9 @@ import logging
 from fastapi import APIRouter
 
 from app.common.response import ApiResponse
-from app.service.sync.model.vessel_sync_schemas import VesselBatchSyncRequest, VesselSyncRequest
-from app.service.sync.vessel_sync import VesselSyncService
+from app.service.sync.request.vessel_batch_sync_request import VesselBatchSyncRequest
+from app.service.sync.request.vessel_sync_request import VesselSyncRequest
+from app.service.sync.scene.vessel.vessel_sync import VesselSyncService
 
 logger = logging.getLogger(__name__)
 

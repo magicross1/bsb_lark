@@ -5,8 +5,9 @@ import logging
 from fastapi import APIRouter
 
 from app.common.response import ApiResponse
-from app.service.sync.model.clear_sync_schemas import ClearSyncRequest, ClearBatchSyncRequest
-from app.service.sync.clear_sync import ClearSyncService
+from app.service.sync.request.clear_batch_sync_request import ClearBatchSyncRequest
+from app.service.sync.request.clear_sync_request import ClearSyncRequest
+from app.service.sync.scene.clear.clear_sync import ClearSyncService
 
 logger = logging.getLogger(__name__)
 

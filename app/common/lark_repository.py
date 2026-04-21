@@ -1,16 +1,28 @@
 from __future__ import annotations
 
-import json
 from abc import ABC
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+
+@dataclass(frozen=True)
+class FieldMeta:
+    """Bitable 字段元数据。"""
+    field_id: str
+    field_name: str
+    type: int
 
 import lark_oapi as lark
 from lark_oapi.api.bitable.v1 import *
 
 from app.core.lark import get_lark_client
 from app.common.exceptions import LarkApiError, NotFoundError
+from app.common.query_wrapper import QueryWrapper
+
+from app.common.update_wrapper import UpdateWrapper
 
 
-class LarkRepository(ABC):
+class BaseRepository(ABC):
     table_id: str
 
     def __init__(self) -> None:
@@ -19,106 +31,108 @@ class LarkRepository(ABC):
     @property
     def app_token(self) -> str:
         from app.config.app_settings import settings
-
         return settings.LARK_BITABLE_APP_TOKEN
 
     def _record_to_dict(self, r: AppTableRecord) -> dict[str, Any]:
-        return {"record_id": r.record_id, **(r.fields or {})}
+        from app.core.lark_bitable_value import extract_cell_text
+        raw = r.fields or {}
+        normalized: dict[str, Any] = {"record_id": r.record_id}
+        for k, v in raw.items():
+            if isinstance(v, (list, dict)):
+                # 复合类型：尝试提取可读文本
+                # 若为 None（关联/附件字段），保留原始值供上层专用工具处理
+                text = extract_cell_text(v)
+                normalized[k] = text if text is not None else v
+            else:
+                normalized[k] = v
+        return normalized
 
-    # ── List / Get ──────────────────────────────────────────
+    # ── 查询 ────────────────────────────────────────────────
 
-    async def list_records(
+    async def list(
         self,
+        query: QueryWrapper | None = None,
         *,
-        page_size: int = 100,
-        page_token: str | None = None,
-        filter_expr: str | None = None,
-        sort_expr: str | None = None,
-        field_names: list[str] | None = None,
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        builder = (
-            ListAppTableRecordRequest.builder().app_token(self.app_token).table_id(self.table_id).page_size(page_size)
-        )
-        if page_token:
-            builder.page_token(page_token)
-        if filter_expr:
-            builder.filter(filter_expr)
-        if sort_expr:
-            builder.sort(sort_expr)
-        if field_names:
-            builder.field_names(json.dumps(field_names))
-
-        resp = await self._client.bitable.v1.app_table_record.alist(
-            builder.build(),
-            lark.BaseRequest.builder().build(),
-        )
-
-        if not resp.success():
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="list_records")
-
-        records = resp.data.items if resp.data and resp.data.items else []
-        next_token = resp.data.page_token if resp.data and resp.data.page_token else None
-        return [self._record_to_dict(r) for r in records], next_token
-
-    async def list_all_records(
-        self,
-        *,
-        filter_expr: str | None = None,
-        sort_expr: str | None = None,
-        field_names: list[str] | None = None,
         page_size: int = 500,
         max_pages: int = 100,
     ) -> list[dict[str, Any]]:
+        """返回所有匹配记录（自动分页 + 客户端精筛）。
+
+        若 query 为 in_list('record_id', ids)，走 batch_get API 直接按 ID 批量取记录。
+        """
+        if query is not None:
+            record_ids = query._get_record_ids_hint()
+            if record_ids:
+                return await self._batch_get(record_ids)
+
         all_records: list[dict[str, Any]] = []
         token: str | None = None
         for _ in range(max_pages):
-            records, token = await self.list_records(
-                page_size=page_size,
-                page_token=token,
-                filter_expr=filter_expr,
-                sort_expr=sort_expr,
-                field_names=field_names,
-            )
-            all_records.extend(records)
+            page, token = await self._search_page(query, page_token=token, page_size=page_size)
+            all_records.extend(page)
             if not token:
                 break
+        if query is not None:
+            all_records = query._apply_client_filter(all_records)
         return all_records
 
-    async def get_record(self, record_id: str) -> dict[str, Any]:
+    async def page(
+        self,
+        query: QueryWrapper | None = None,
+        *,
+        page_token: str | None = None,
+        page_size: int = 100,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """单页查询，返回 (records, next_page_token)。
+
+        仅应用服务端过滤，不含客户端精筛（client_filter 子句被忽略）。
+        """
+        return await self._search_page(query, page_token=page_token, page_size=page_size)
+
+    async def _get(self, record_id: str) -> dict[str, Any]:
+        """按 record_id 直接取单条记录（内部实现，外部通过 find(QueryWrapper().eq('record_id', ...)) 调用）。"""
         resp = await self._client.bitable.v1.app_table_record.aget(
             GetAppTableRecordRequest.builder()
             .app_token(self.app_token)
             .table_id(self.table_id)
             .record_id(record_id)
             .build(),
-            lark.BaseRequest.builder().build(),
         )
-
         if not resp.success():
             if resp.code == 1254006:
                 raise NotFoundError(resource="record", detail=record_id)
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="get_record")
-
+            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="get")
         return self._record_to_dict(resp.data.record)
 
-    # ── Create ──────────────────────────────────────────────
+    async def findOne(self, query: QueryWrapper) -> dict[str, Any] | None:
+        """返回第一条匹配记录，无匹配则返回 None。
 
-    async def create_record(self, fields: dict[str, Any]) -> dict[str, Any]:
+        若 query 为 eq('record_id', rid)，走直连 GET API（性能更优）；否则走 search + 客户端精筛。
+        """
+        rid = query._get_record_id_hint()
+        if rid:
+            try:
+                return await self._get(rid)
+            except NotFoundError:
+                return None
+        records = await self.list(query)
+        return records[0] if records else None
+
+    # ── 写操作 ──────────────────────────────────────────────
+
+    async def createOne(self, fields: dict[str, Any]) -> dict[str, Any]:
         resp = await self._client.bitable.v1.app_table_record.acreate(
             CreateAppTableRecordRequest.builder()
             .app_token(self.app_token)
             .table_id(self.table_id)
             .request_body(AppTableRecord.builder().fields(fields).build())
             .build(),
-            lark.BaseRequest.builder().build(),
         )
-
         if not resp.success():
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="create_record")
-
+            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="create")
         return self._record_to_dict(resp.data.record)
 
-    async def batch_create_records(self, fields_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def batch_create(self, fields_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
         records = [AppTableRecord.builder().fields(f).build() for f in fields_list]
         resp = await self._client.bitable.v1.app_table_record.abatch_create(
             BatchCreateAppTableRecordRequest.builder()
@@ -126,216 +140,147 @@ class LarkRepository(ABC):
             .table_id(self.table_id)
             .request_body(BatchCreateAppTableRecordRequestBody.builder().records(records).build())
             .build(),
-            lark.BaseRequest.builder().build(),
         )
-
         if not resp.success():
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="batch_create_records")
-
+            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="batch_create")
         items = resp.data.records if resp.data and resp.data.records else []
         return [self._record_to_dict(r) for r in items]
 
-    # ── Update ──────────────────────────────────────────────
-
-    async def update_record(self, record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+    async def updateOne(self, wrapper: UpdateWrapper) -> dict[str, Any]:
+        """按 record_id 更新单条记录。必须通过 UpdateWrapper().eq('record_id', rid).set(...) 指定目标。"""
+        rid = wrapper._get_record_id_hint()
+        if not rid:
+            raise ValueError("updateOne() 需通过 UpdateWrapper().eq('record_id', rid) 指定目标记录")
+        fields = wrapper._get_fields()
+        if not fields:
+            raise ValueError("UpdateWrapper 未调用 set() / set_all()")
         resp = await self._client.bitable.v1.app_table_record.aupdate(
             UpdateAppTableRecordRequest.builder()
             .app_token(self.app_token)
             .table_id(self.table_id)
-            .record_id(record_id)
+            .record_id(rid)
             .request_body(AppTableRecord.builder().fields(fields).build())
             .build(),
-            lark.BaseRequest.builder().build(),
         )
-
         if not resp.success():
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="update_record")
-
+            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="updateOne")
         return self._record_to_dict(resp.data.record)
 
-    async def batch_update_records(self, updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        records = [AppTableRecord.builder().record_id(u["record_id"]).fields(u["fields"]).build() for u in updates]
+    async def batch_update(self, wrappers: list[UpdateWrapper]) -> list[dict[str, Any]]:
+        """批量更新记录，每条可指定不同字段（均须含 record_id hint）。"""
+        if not wrappers:
+            return []
+        records = [
+            AppTableRecord.builder()
+            .record_id(w._get_record_id_hint() or "")
+            .fields(w._get_fields())
+            .build()
+            for w in wrappers
+        ]
         resp = await self._client.bitable.v1.app_table_record.abatch_update(
             BatchUpdateAppTableRecordRequest.builder()
             .app_token(self.app_token)
             .table_id(self.table_id)
             .request_body(BatchUpdateAppTableRecordRequestBody.builder().records(records).build())
             .build(),
-            lark.BaseRequest.builder().build(),
         )
-
         if not resp.success():
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="batch_update_records")
-
+            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="batch_update")
         items = resp.data.records if resp.data and resp.data.records else []
         return [self._record_to_dict(r) for r in items]
 
-    # ── Delete ──────────────────────────────────────────────
-
-    async def delete_record(self, record_id: str) -> None:
+    async def deleteOne(self, query: QueryWrapper) -> None:
+        """删除单条记录。必须通过 QueryWrapper().eq('record_id', rid) 指定目标记录。"""
+        rid = query._get_record_id_hint()
+        if not rid:
+            raise ValueError("delete() 需通过 QueryWrapper().eq('record_id', rid) 指定目标记录")
         resp = await self._client.bitable.v1.app_table_record.adelete(
             DeleteAppTableRecordRequest.builder()
             .app_token(self.app_token)
             .table_id(self.table_id)
-            .record_id(record_id)
+            .record_id(rid)
             .build(),
-            lark.BaseRequest.builder().build(),
         )
-
         if not resp.success():
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="delete_record")
+            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="delete")
 
-    async def batch_delete_records(self, record_ids: list[str]) -> None:
+    async def batch_delete(self, record_ids: list[str]) -> None:
         resp = await self._client.bitable.v1.app_table_record.abatch_delete(
             BatchDeleteAppTableRecordRequest.builder()
             .app_token(self.app_token)
             .table_id(self.table_id)
             .request_body(BatchDeleteAppTableRecordRequestBody.builder().records(record_ids).build())
             .build(),
-            lark.BaseRequest.builder().build(),
         )
-
         if not resp.success():
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="batch_delete_records")
+            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="batch_delete")
 
-    # ── Batch Get ───────────────────────────────────────────
-
-    async def batch_get_records(self, record_ids: list[str]) -> list[dict[str, Any]]:
+    async def _batch_get(self, record_ids: list[str]) -> list[dict[str, Any]]:
+        """按 record_id 列表批量取记录（内部实现，外部通过 list(QueryWrapper().in_list('record_id', ids)) 调用）。"""
+        if not record_ids:
+            return []
         resp = await self._client.bitable.v1.app_table_record.abatch_get(
             BatchGetAppTableRecordRequest.builder()
             .app_token(self.app_token)
             .table_id(self.table_id)
             .request_body(BatchGetAppTableRecordRequestBody.builder().record_ids(record_ids).build())
             .build(),
-            lark.BaseRequest.builder().build(),
         )
-
         if not resp.success():
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="batch_get_records")
-
+            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="batch_get")
         items = resp.data.records if resp.data and resp.data.records else []
         return [self._record_to_dict(r) for r in items]
 
-    # ── Search ──────────────────────────────────────────────
+    # ── 字段元数据 ───────────────────────────────────────────
 
-    async def search_records(
+    async def list_fields(self) -> list[FieldMeta]:
+        resp = await self._client.bitable.v1.app_table_field.alist(
+            ListAppTableFieldRequest.builder()
+            .app_token(self.app_token)
+            .table_id(self.table_id)
+            .build(),
+        )
+        if not resp.success():
+            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="list_fields")
+        items = resp.data.items if resp.data and resp.data.items else []
+        return [FieldMeta(field_id=f.field_id, field_name=f.field_name, type=f.type) for f in items]
+
+    # ── 内部分页（_search_page）────────────────────────────
+
+    async def _search_page(
         self,
+        query: QueryWrapper | None,
         *,
-        condition: dict[str, Any] | None = None,
-        page_size: int = 100,
         page_token: str | None = None,
-        field_names: list[str] | None = None,
-        sort: list[dict[str, Any]] | None = None,
+        page_size: int = 100,
     ) -> tuple[list[dict[str, Any]], str | None]:
-        body_builder = SearchAppTableRecordRequestBody.builder().page_size(page_size)
-        if condition:
-            body_builder.condition(condition)
+        flt = query._to_filter() if query else None
+        field_names = query._to_field_names() if query else None
+        sort = query._to_sort() if query else None
+
+        body_builder = SearchAppTableRecordRequestBody.builder()
+        if flt:
+            body_builder.filter(flt)
         if field_names:
-            body_builder.field_names(str(field_names))
+            body_builder.field_names(field_names)
         if sort:
             body_builder.sort(sort)
 
-        resp = await self._client.bitable.v1.app_table_record.asearch(
+        req_builder = (
             SearchAppTableRecordRequest.builder()
             .app_token(self.app_token)
             .table_id(self.table_id)
+            .page_size(page_size)
             .request_body(body_builder.build())
-            .build(),
-            lark.BaseRequest.builder().build(),
         )
+        if page_token:
+            req_builder.page_token(page_token)
+
+        resp = await self._client.bitable.v1.app_table_record.asearch(req_builder.build())
 
         if not resp.success():
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="search_records")
+            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="search")
 
         items = resp.data.items if resp.data and resp.data.items else []
         next_token = resp.data.page_token if resp.data and resp.data.page_token else None
         return [self._record_to_dict(r) for r in items], next_token
-
-    # ── Find by Business Key ────────────────────────────────
-
-    async def find_record(
-        self,
-        field_name: str,
-        value: str,
-    ) -> dict[str, Any] | None:
-        filter_expr = f'CurrentValue.[{field_name}]="{value}"'
-        records, _ = await self.list_records(filter_expr=filter_expr, page_size=1)
-        return records[0] if records else None
-
-    async def find_record_or_fail(
-        self,
-        field_name: str,
-        value: str,
-    ) -> dict[str, Any]:
-        record = await self.find_record(field_name, value)
-        if record is None:
-            raise NotFoundError(resource=f"{self.table_id} record with {field_name}={value}")
-        return record
-
-    async def find_record_id(
-        self,
-        field_name: str,
-        value: str,
-    ) -> str | None:
-        record = await self.find_record(field_name, value)
-        return record["record_id"] if record else None
-
-    async def find_record_id_or_fail(
-        self,
-        field_name: str,
-        value: str,
-    ) -> str:
-        record_id = await self.find_record_id(field_name, value)
-        if record_id is None:
-            raise NotFoundError(resource=f"{self.table_id} record with {field_name}={value}")
-        return record_id
-
-    # ── Upsert (find by key → update or create) ────────────
-
-    async def upsert_record(
-        self,
-        key_field: str,
-        key_value: str,
-        fields: dict[str, Any],
-    ) -> dict[str, Any]:
-        existing = await self.find_record(key_field, key_value)
-        if existing:
-            return await self.update_record(existing["record_id"], fields)
-        return await self.create_record(fields)
-
-    # ── Update by Business Key ──────────────────────────────
-
-    async def update_by_key(
-        self,
-        key_field: str,
-        key_value: str,
-        fields: dict[str, Any],
-    ) -> dict[str, Any]:
-        record_id = await self.find_record_id_or_fail(key_field, key_value)
-        return await self.update_record(record_id, fields)
-
-    async def delete_by_key(
-        self,
-        key_field: str,
-        key_value: str,
-    ) -> None:
-        record_id = await self.find_record_id_or_fail(key_field, key_value)
-        await self.delete_record(record_id)
-
-    # ── Fields ──────────────────────────────────────────────
-
-    async def list_fields(self) -> list[dict[str, Any]]:
-        resp = await self._client.bitable.v1.app_table_field.alist(
-            ListAppTableFieldRequest.builder().app_token(self.app_token).table_id(self.table_id).build(),
-            lark.BaseRequest.builder().build(),
-        )
-
-        if not resp.success():
-            raise LarkApiError(lark_code=resp.code, message=resp.msg, detail="list_fields")
-
-        items = resp.data.items if resp.data and resp.data.items else []
-        return [{"field_id": f.field_id, "field_name": f.field_name, "type": f.type} for f in items]
-
-
-# Backward-compatible alias during the repository refactor.
-BaseRepository = LarkRepository

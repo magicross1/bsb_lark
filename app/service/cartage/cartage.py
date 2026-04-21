@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.common.query_wrapper import QueryWrapper
+from app.common.update_wrapper import UpdateWrapper
+
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -74,7 +77,7 @@ class CartageService:
         key = CartageMatchingCacheKey.ADDRESSES
         cached = c.get(key)
         if cached is None:
-            records = await self._warehouse_address_repo.list_all_records(
+            records = await self._warehouse_address_repo.list(
                 field_names=["Address"],
             )
             c.set(key, records)
@@ -86,7 +89,7 @@ class CartageService:
         key = CartageMatchingCacheKey.DELIVER_CONFIGS
         cached = c.get(key)
         if cached is None:
-            records = await self._warehouse_deliver_config_repo.list_all_records(
+            records = await self._warehouse_deliver_config_repo.list(
                 field_names=["Deliver Config", "Deliver Type", "Warehouse Address"],
             )
             c.set(key, records)
@@ -98,7 +101,7 @@ class CartageService:
         key = CartageMatchingCacheKey.CONSINGEES
         cached = c.get(key)
         if cached is None:
-            records = await self._consingee_repo.list_all_records(
+            records = await self._consingee_repo.list(
                 field_names=["Name", "MD-Warehouse Address"],
             )
             c.set(key, records)
@@ -139,7 +142,7 @@ class CartageService:
             if not container.container_number:
                 skipped.append(SkippedContainer(container_number="", reason="missing container_number"))
                 continue
-            existing = await self._import_repo.find_record("Container Number", container.container_number)
+            existing = await self._import_repo.findOne(QueryWrapper().eq("Container Number", container.container_number))
             if existing:
                 skipped.append(
                     SkippedContainer(
@@ -160,12 +163,12 @@ class CartageService:
 
         for container in to_create:
             cartage_fields = await self._build_cartage_fields(result, OP_CARTAGE_IMPORT_RULES)
-            cartage_created = await self._op_cartage_repo.create_record(cartage_fields)
+            cartage_created = await self._op_cartage_repo.createOne(cartage_fields)
             cartage_ref = WritebackRecordRef(record_id=cartage_created["record_id"], table_name="Op-Cartage")
             cartage_refs.append(cartage_ref)
 
             import_fields = await self._build_import_fields(container, cartage_ref.record_id)
-            import_created = await self._import_repo.create_record(import_fields)
+            import_created = await self._import_repo.createOne(import_fields)
             import_refs.append(WritebackRecordRef(record_id=import_created["record_id"], table_name="Op-Import"))
             logger.info("创建 Op-Import %s → Op-Cartage %s", import_created["record_id"], cartage_ref.record_id)
 
@@ -186,7 +189,7 @@ class CartageService:
         for container in result.import_containers:
             is_dup = False
             if container.container_number:
-                existing = await self._import_repo.find_record("Container Number", container.container_number)
+                existing = await self._import_repo.findOne(QueryWrapper().eq("Container Number", container.container_number))
                 if existing:
                     is_dup = True
                     skipped.append(
@@ -203,7 +206,7 @@ class CartageService:
             if is_dup:
                 cartage_fields["Record Status"] = RECORD_STATUS_DUPLICATE
                 cartage_fields["Source Cartage"] = [source_record_id]
-                cartage_created = await self._op_cartage_repo.create_record(cartage_fields)
+                cartage_created = await self._op_cartage_repo.createOne(cartage_fields)
                 cartage_refs.append(
                     WritebackRecordRef(record_id=cartage_created["record_id"], table_name="Op-Cartage")
                 )
@@ -212,27 +215,26 @@ class CartageService:
             if not first_used:
                 cartage_fields["Record Status"] = RECORD_STATUS_SUCCESS
                 cartage_fields["Source Cartage"] = [source_record_id]
-                await self._op_cartage_repo.update_record(source_record_id, cartage_fields)
+                await self._op_cartage_repo.updateOne(UpdateWrapper().eq("record_id", source_record_id).set_all(cartage_fields))
                 cartage_ref = WritebackRecordRef(record_id=source_record_id, table_name="Op-Cartage")
                 first_used = True
                 logger.info("更新 Op-Cartage %s 对应箱号 %s", source_record_id, container.container_number)
             else:
                 cartage_fields["Record Status"] = RECORD_STATUS_SUCCESS
                 cartage_fields["Source Cartage"] = [source_record_id]
-                cartage_created = await self._op_cartage_repo.create_record(cartage_fields)
+                cartage_created = await self._op_cartage_repo.createOne(cartage_fields)
                 cartage_ref = WritebackRecordRef(record_id=cartage_created["record_id"], table_name="Op-Cartage")
                 logger.info("创建 Op-Cartage %s 对应箱号 %s", cartage_created["record_id"], container.container_number)
             cartage_refs.append(cartage_ref)
 
             import_fields = await self._build_import_fields(container, cartage_ref.record_id)
-            import_created = await self._import_repo.create_record(import_fields)
+            import_created = await self._import_repo.createOne(import_fields)
             import_refs.append(WritebackRecordRef(record_id=import_created["record_id"], table_name="Op-Import"))
 
         if not first_used and skipped:
-            await self._op_cartage_repo.update_record(
-                source_record_id,
-                {"Record Status": RECORD_STATUS_DUPLICATE, "Source Cartage": [source_record_id]},
-            )
+            await self._op_cartage_repo.updateOne(UpdateWrapper().eq("record_id", source_record_id)
+                .set("Record Status", RECORD_STATUS_DUPLICATE,)
+                .set("Source Cartage", [source_record_id]))
 
         return CartageWritebackResult(cartage_refs=cartage_refs, imports=import_refs, skipped=skipped)
 
@@ -248,7 +250,7 @@ class CartageService:
         for booking in expanded:
             cn = booking.container_number
             if cn:
-                existing = await self._export_repo.find_record("Container Number", cn)
+                existing = await self._export_repo.findOne(QueryWrapper().eq("Container Number", cn))
                 if existing:
                     skipped.append(
                         SkippedContainer(
@@ -267,12 +269,12 @@ class CartageService:
 
         for booking in to_create:
             cartage_fields = await self._build_cartage_fields(result, OP_CARTAGE_EXPORT_RULES)
-            cartage_created = await self._op_cartage_repo.create_record(cartage_fields)
+            cartage_created = await self._op_cartage_repo.createOne(cartage_fields)
             cartage_ref = WritebackRecordRef(record_id=cartage_created["record_id"], table_name="Op-Cartage")
             cartage_refs.append(cartage_ref)
 
             export_fields = await self._build_export_fields(booking, cartage_ref.record_id)
-            export_created = await self._export_repo.create_record(export_fields)
+            export_created = await self._export_repo.createOne(export_fields)
             export_refs.append(WritebackRecordRef(record_id=export_created["record_id"], table_name="Op-Export"))
 
         return CartageWritebackResult(cartage_refs=cartage_refs, exports=export_refs, skipped=skipped)
@@ -296,7 +298,7 @@ class CartageService:
             is_dup = False
             cn = booking.container_number
             if cn:
-                existing = await self._export_repo.find_record("Container Number", cn)
+                existing = await self._export_repo.findOne(QueryWrapper().eq("Container Number", cn))
                 if existing:
                     is_dup = True
                     skipped.append(
@@ -311,7 +313,7 @@ class CartageService:
             if is_dup:
                 cartage_fields["Record Status"] = RECORD_STATUS_DUPLICATE
                 cartage_fields["Source Cartage"] = [source_record_id]
-                cartage_created = await self._op_cartage_repo.create_record(cartage_fields)
+                cartage_created = await self._op_cartage_repo.createOne(cartage_fields)
                 cartage_refs.append(
                     WritebackRecordRef(record_id=cartage_created["record_id"], table_name="Op-Cartage")
                 )
@@ -320,14 +322,14 @@ class CartageService:
             if not first_used:
                 cartage_fields["Record Status"] = RECORD_STATUS_SUCCESS
                 cartage_fields["Source Cartage"] = [source_record_id]
-                await self._op_cartage_repo.update_record(source_record_id, cartage_fields)
+                await self._op_cartage_repo.updateOne(UpdateWrapper().eq("record_id", source_record_id).set_all(cartage_fields))
                 cartage_ref = WritebackRecordRef(record_id=source_record_id, table_name="Op-Cartage")
                 first_used = True
                 logger.info("更新 Op-Cartage %s 对应出口订舱 %s", source_record_id, booking.booking_reference)
             else:
                 cartage_fields["Record Status"] = RECORD_STATUS_SUCCESS
                 cartage_fields["Source Cartage"] = [source_record_id]
-                cartage_created = await self._op_cartage_repo.create_record(cartage_fields)
+                cartage_created = await self._op_cartage_repo.createOne(cartage_fields)
                 cartage_ref = WritebackRecordRef(record_id=cartage_created["record_id"], table_name="Op-Cartage")
                 logger.info(
                     "创建 Op-Cartage %s 对应出口订舱 %s", cartage_created["record_id"], booking.booking_reference
@@ -335,14 +337,13 @@ class CartageService:
             cartage_refs.append(cartage_ref)
 
             export_fields = await self._build_export_fields(booking, cartage_ref.record_id)
-            export_created = await self._export_repo.create_record(export_fields)
+            export_created = await self._export_repo.createOne(export_fields)
             export_refs.append(WritebackRecordRef(record_id=export_created["record_id"], table_name="Op-Export"))
 
         if not first_used and skipped:
-            await self._op_cartage_repo.update_record(
-                source_record_id,
-                {"Record Status": RECORD_STATUS_DUPLICATE, "Source Cartage": [source_record_id]},
-            )
+            await self._op_cartage_repo.updateOne(UpdateWrapper().eq("record_id", source_record_id)
+                .set("Record Status", RECORD_STATUS_DUPLICATE,)
+                .set("Source Cartage", [source_record_id]))
 
         return CartageWritebackResult(cartage_refs=cartage_refs, exports=export_refs, skipped=skipped)
 

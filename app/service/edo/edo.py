@@ -4,7 +4,7 @@ from typing import Any
 
 from app.cache.constants import EdoMatchingCacheKey
 from app.cache.factory import CacheFactory
-from app.core.lark_bitable_value import extract_cell_text
+from app.common.query_wrapper import QueryWrapper
 from app.repository.empty_park import EmptyParkRepository
 from app.repository.shipping_line import ShippingLineRepository
 from app.service.llm_service.edo.schemas import EdoDictValues, EmptyParkDictEntry
@@ -32,8 +32,8 @@ class EdoService:
         key = EdoMatchingCacheKey.SHIPPING_LINES
         cached = c.get(key)
         if cached is None:
-            records = await self._shipping_line_repo.list_all_records(
-                field_names=["Shipping Line", "Shiiping Line Short Name"],
+            records = await self._shipping_line_repo.list(
+                QueryWrapper().select("Shipping Line", "Shiiping Line Short Name"),
             )
             c.set(key, records)
             return records
@@ -44,8 +44,8 @@ class EdoService:
         key = EdoMatchingCacheKey.EMPTY_PARKS
         cached = c.get(key)
         if cached is None:
-            records = await self._empty_park_repo.list_all_records(
-                field_names=["Empty Park", "Facility Address", "Alias"],
+            records = await self._empty_park_repo.list(
+                QueryWrapper().select("Empty Park", "Facility Address", "Alias"),
             )
             c.set(key, records)
             return records
@@ -60,15 +60,15 @@ class EdoService:
 
         shipping_lines: list[str] = []
         for rec in sl_records:
-            name = extract_cell_text(rec.get("Shipping Line", rec.get("shipping_line")))
+            name = rec.get("Shipping Line") or ""
             if name:
                 shipping_lines.append(name.strip())
 
         empty_parks: list[EmptyParkDictEntry] = []
         for rec in ep_records:
-            name = extract_cell_text(rec.get("Empty Park", rec.get("empty_park")))
-            addr = extract_cell_text(rec.get("Facility Address", rec.get("facility_address")))
-            alias_raw = extract_cell_text(rec.get("Alias", rec.get("alias")))
+            name = rec.get("Empty Park") or ""
+            addr = rec.get("Facility Address") or ""
+            alias_raw = rec.get("Alias") or ""
             aliases = [a.strip() for a in alias_raw.split(";") if a.strip()] if alias_raw else []
             if name:
                 empty_parks.append(

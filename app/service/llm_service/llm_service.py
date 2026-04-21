@@ -155,11 +155,12 @@ class LLMService:
         Downloads the Cartage Advise attachment, parses, enriches,
         and writes back with Record Status + Source Cartage fields.
         """
+        from app.common.query_wrapper import QueryWrapper
         from app.core.lark_bitable_value import extract_attachment_file_tokens, extract_cell_text
         from app.repository.cartage import CartageRepository
 
         cartage_repo = CartageRepository()
-        record = await cartage_repo.get_record(record_id)
+        record = await cartage_repo.findOne(QueryWrapper().eq("record_id", record_id))
 
         existing_status = extract_cell_text(record.get("Record Status"))
         if existing_status:
@@ -192,9 +193,10 @@ class LLMService:
         from app.core.lark_bitable_value import extract_attachment_file_tokens, extract_cell_text
         from app.repository.cartage import CartageRepository
 
+        from app.common.query_wrapper import QueryWrapper
         cartage_repo = CartageRepository()
-        records, _ = await cartage_repo.list_records(
-            field_names=["Cartage Advise", "Record Status"],
+        records, _ = await cartage_repo.page(
+            QueryWrapper().select("Cartage Advise", "Record Status"),
             page_size=100,
         )
 
@@ -228,11 +230,12 @@ class LLMService:
         *,
         model: str | None = None,
     ) -> tuple[EdoProcessResult, EdoWritebackResult]:
+        from app.common.query_wrapper import QueryWrapper
         from app.core.lark_bitable_value import extract_attachment_file_tokens, extract_cell_text
         from app.repository.import_ import ImportRepository
 
         import_repo = ImportRepository()
-        record = await import_repo.get_record(record_id)
+        record = await import_repo.findOne(QueryWrapper().eq("record_id", record_id))
 
         existing_status = extract_cell_text(record.get("Record Status"))
         if existing_status:
@@ -261,9 +264,10 @@ class LLMService:
         from app.core.lark_bitable_value import extract_attachment_file_tokens, extract_cell_text
         from app.repository.import_ import ImportRepository
 
+        from app.common.query_wrapper import QueryWrapper
         import_repo = ImportRepository()
-        records, _ = await import_repo.list_records(
-            field_names=["EDO File", "Record Status"],
+        records, _ = await import_repo.page(
+            QueryWrapper().select("EDO File", "Record Status"),
             page_size=100,
         )
 

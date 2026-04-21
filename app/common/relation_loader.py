@@ -4,8 +4,10 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from app.common.query_wrapper import QueryWrapper
+
 if TYPE_CHECKING:
-    from app.common.lark_repository import LarkRepository
+    from app.common.lark_repository import BaseRepository
 
 _BATCH_CHUNK_SIZE = 100
 
@@ -28,13 +30,12 @@ async def load_terminal_mapping() -> dict[str, dict[str, str]]:
         table_id = T.md_terminal.id
 
     repo = _TerminalRepo()
-    records = await repo.list_all_records(field_names=["Terminal Full Name", "Depot"])
+    records = await repo.list(QueryWrapper().select("Terminal Full Name", "Depot"))
 
     mapping: dict[str, dict[str, str]] = {}
     for r in records:
-        from app.core.lark_bitable_value import extract_cell_text
-        full_name = extract_cell_text(r.get("Terminal Full Name"))
-        depot = extract_cell_text(r.get("Depot"))
+        full_name = r.get("Terminal Full Name")
+        depot = r.get("Depot")
         if full_name:
             mapping[full_name] = {"Depot": depot}
 
@@ -81,7 +82,7 @@ class RelationConfig:
     """
 
     field_name: str
-    repository: LarkRepository
+    repository: BaseRepository
     as_field: str | None = None
     load_fields: list[str] | None = None
 
@@ -140,7 +141,10 @@ class RelationLoader:
         chunks = [id_list[i : i + _BATCH_CHUNK_SIZE] for i in range(0, len(id_list), _BATCH_CHUNK_SIZE)]
 
         chunk_results: list[list[dict[str, Any]]] = list(
-            await asyncio.gather(*[rel.repository.batch_get_records(chunk) for chunk in chunks])
+            await asyncio.gather(*[
+                rel.repository.list(QueryWrapper().in_list("record_id", chunk))
+                for chunk in chunks
+            ])
         )
 
         return {r["record_id"]: r for chunk in chunk_results for r in chunk}

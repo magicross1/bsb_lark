@@ -4,7 +4,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from app.common.lark_repository import LarkRepository
+from app.common.lark_repository import BaseRepository
+from app.common.query_wrapper import QueryWrapper
 from app.core.lark_bitable_value import extract_cell_text, extract_link_record_ids
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ class RelationResolver:
 
     def __init__(self) -> None:
         self._record_cache: dict[str, dict[str, dict[str, Any]]] = {}
-        self._repo_cache: dict[str, LarkRepository] = {}
+        self._repo_cache: dict[str, BaseRepository] = {}
 
     async def resolve(
         self,
@@ -150,7 +151,7 @@ class RelationResolver:
 
         if missing:
             repo = self._get_repo(table_id)
-            fetched = await repo.batch_get_records(missing)
+            fetched = await repo.list(QueryWrapper().in_list("record_id", missing))
             for rec in fetched:
                 rid = rec.get("record_id", "")
                 if rid:
@@ -159,11 +160,11 @@ class RelationResolver:
 
         return {rid: cached[rid] for rid in record_ids if rid in cached}
 
-    def _get_repo(self, table_id: str) -> LarkRepository:
+    def _get_repo(self, table_id: str) -> BaseRepository:
         if table_id not in self._repo_cache:
-            from app.common.lark_repository import LarkRepository
+            from app.common.lark_repository import BaseRepository
 
-            class _DynamicRepo(LarkRepository):
+            class _DynamicRepo(BaseRepository):
                 pass
 
             _DynamicRepo.table_id = table_id

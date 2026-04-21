@@ -75,7 +75,7 @@ OP_IMPORT_RULES: list[WritebackFieldRule] = [
         link_lookup=LinkLookup(
             target_table_id=T.op_vessel_schedule.id,
             search_field="Vessel Name",
-            filter_expr='AND(CurrentValue.[Voyage]="{voyage}", CurrentValue.[Base Node]="{base_node}")',
+            filter_conditions=[("Voyage", "voyage"), ("Base Node", "base_node")],
             create_if_missing=True,
             create_fields={
                 "Vessel Name": "{value}",
@@ -131,7 +131,7 @@ OP_EXPORT_RULES: list[WritebackFieldRule] = [
         link_lookup=LinkLookup(
             target_table_id=T.op_vessel_schedule.id,
             search_field="Vessel Name",
-            filter_expr='AND(CurrentValue.[Voyage]="{voyage}", CurrentValue.[Base Node]="{base_node}")',
+            filter_conditions=[("Voyage", "voyage"), ("Base Node", "base_node")],
             create_if_missing=True,
             create_fields={
                 "Vessel Name": "{value}",
