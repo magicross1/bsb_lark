@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.common.assert_utils import assert_in, assert_not_blank
 from app.common.query_wrapper import QueryWrapper
 from app.component.OneStopProvider import OneStopProvider
 from app.repository.vessel_schedule import VesselScheduleRepository
@@ -12,10 +13,9 @@ from app.service.sync.constants.vessel_constants import (
     _KEY_SEP,
     _TERMINAL_LINK,
 )
-from app.service.sync.result.vessel_batch_sync_result import VesselBatchSyncResult
-from app.service.sync.result.vessel_sync_result import VesselSyncResult
+from app.service.sync.workflow.batch_sync_result import BatchSyncResult
 from app.service.sync.scene.vessel.vessel_data import VesselData
-from app.service.sync.utils.datetime_parser import parse_datetime_to_timestamp
+from app.service.sync.utils.datetime_parser import safe_ts
 from app.service.sync.utils.link_resolver import LinkResolver
 from app.service.sync.workflow.sync_template import SyncTemplate
 
@@ -52,10 +52,7 @@ class VesselSyncService(SyncTemplate):
     # ── Step 1 ──────────────────────────────────────────────
 
     async def fetch_records(self, condition: str, base_node: str | None = None) -> list[dict]:
-        query = _CONDITIONS.get(condition)
-        if query is None:
-            available = ", ".join(_CONDITIONS.keys())
-            raise ValueError(f"未知条件 '{condition}'，可用条件: {available}")
+        query = assert_in(condition, _CONDITIONS, f"未知条件 '{condition}'，可用: {', '.join(_CONDITIONS)}")
 
         all_records = await self._repo.list(query)
 
@@ -97,12 +94,12 @@ class VesselSyncService(SyncTemplate):
                     VesselData(
                         record_id=r["record_id"],
                         vessel_key=key,
-                        eta=_ts(raw, "ETA"),
-                        etd=_ts(raw, "ETD"),
-                        first_free=_ts(raw, "First Free"),
-                        last_free=_ts(raw, "Last Free"),
-                        export_start=_ts(raw, "Export Start"),
-                        export_cutoff=_ts(raw, "Export Cutoff"),
+                        eta=safe_ts(raw, "ETA"),
+                        etd=safe_ts(raw, "ETD"),
+                        first_free=safe_ts(raw, "First Free"),
+                        last_free=safe_ts(raw, "Last Free"),
+                        export_start=safe_ts(raw, "Export Start"),
+                        export_cutoff=safe_ts(raw, "Export Cutoff"),
                         actual_arrival=raw.get("Actual Arrival") or None,
                         terminal_name=terminal_name_id,
                     )
@@ -118,17 +115,15 @@ class VesselSyncService(SyncTemplate):
 
     # ── 对外接口 ─────────────────────────────────────────────
 
-    async def sync_single(self, record_id: str) -> VesselSyncResult:
+    async def sync_single(self, record_id: str) -> BatchSyncResult:
         """手动触发：同步单条船期记录。"""
         record = await self._repo.findOne(QueryWrapper().eq("record_id", record_id))
         vessel_name = record.get("Vessel Name")
         voyage = record.get("Voyage")
         base_node = _extract_base_node(record.get("Base Node"))
 
-        if not vessel_name:
-            raise ValueError(f"记录 {record_id} 缺少 Vessel Name")
-        if not base_node:
-            raise ValueError(f"记录 {record_id} 缺少 Base Node")
+        assert_not_blank(vessel_name, f"记录 {record_id} 缺少 Vessel Name")
+        assert_not_blank(base_node, f"记录 {record_id} 缺少 Base Node")
 
         try:
             raw_map = await self._onestop.vessel_search_by_name_list(
@@ -137,49 +132,45 @@ class VesselSyncService(SyncTemplate):
             )
             raw = raw_map.get(vessel_name)
         except Exception as e:
-            return VesselSyncResult(record_id=record_id, error=str(e))
+            logger.error("船期单条同步失败 %s: %s", record_id, e)
+            return BatchSyncResult(total=1, errors=1)
 
         if not raw or not (raw.get("ETA") or raw.get("ETD")):
-            return VesselSyncResult(record_id=record_id)
+            return BatchSyncResult(total=1)
 
         terminal_name_id = await self._resolve_terminal_link(raw)
         vessel_data = VesselData(
             record_id=record_id,
             vessel_key=vessel_name,
-            eta=_ts(raw, "ETA"),
-            etd=_ts(raw, "ETD"),
-            first_free=_ts(raw, "First Free"),
-            last_free=_ts(raw, "Last Free"),
-            export_start=_ts(raw, "Export Start"),
-            export_cutoff=_ts(raw, "Export Cutoff"),
+            eta=safe_ts(raw, "ETA"),
+            etd=safe_ts(raw, "ETD"),
+            first_free=safe_ts(raw, "First Free"),
+            last_free=safe_ts(raw, "Last Free"),
+            export_start=safe_ts(raw, "Export Start"),
+            export_cutoff=safe_ts(raw, "Export Cutoff"),
             actual_arrival=raw.get("Actual Arrival") or None,
             terminal_name=terminal_name_id,
         )
 
         if not vessel_data.has_fields():
-            return VesselSyncResult(record_id=record_id)
+            return BatchSyncResult(total=1)
 
         wrapper = vessel_data.to_update_wrapper()
         await self._repo.updateOne(wrapper)
-        logger.info("船期单条同步 %s: %s", record_id, list(wrapper.fields.keys()))
-        return VesselSyncResult(record_id=record_id, updated_fields=list(wrapper.fields.keys()))
+        logger.info("船期单条同步 %s", record_id)
+        return BatchSyncResult(total=1, synced=1)
 
     async def sync_batch(
         self,
         condition: str = "pending_arrival",
         base_node: str | None = None,
-    ) -> VesselBatchSyncResult:
+    ) -> BatchSyncResult:
         records = await self.fetch_records(condition, base_node=base_node)
         if not records:
-            return VesselBatchSyncResult()
+            return BatchSyncResult()
         data_list = await self.fetch_provider_data(records)
         wrappers = self.build_update_wrappers(data_list)
-        batch_result = await self._persist(wrappers)
-        return VesselBatchSyncResult(
-            total=batch_result.total,
-            synced=batch_result.synced,
-            errors=batch_result.errors,
-        )
+        return await self._persist(wrappers)
 
 
 # ── 工具函数 ──────────────────────────────────────────────────
@@ -212,8 +203,3 @@ def _group_by_vessel_key(records: list[dict]) -> dict[str, list[dict]]:
         key = _make_key(vessel_name, voyage, base_node)
         grouped.setdefault(key, []).append(r)
     return grouped
-
-
-def _ts(raw: dict, key: str) -> int | None:
-    v = raw.get(key)
-    return parse_datetime_to_timestamp(str(v)) if v else None

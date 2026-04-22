@@ -16,3 +16,9 @@ def parse_datetime_to_timestamp(dt_str: str) -> int | None:
             continue
     logger.warning("日期解析失败: %s", dt_str)
     return None
+
+
+def safe_ts(raw: dict, key: str) -> int | None:
+    """从 dict 取值并转为毫秒时间戳，空值返回 None。"""
+    v = raw.get(key)
+    return parse_datetime_to_timestamp(str(v)) if v else None

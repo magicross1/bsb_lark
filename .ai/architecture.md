@@ -32,9 +32,12 @@ app/
     midlleware/registry.py # Module auto-registration
   common/
     lark_tables.py         # All 37 Bitable table/field ID mappings
-    lark_repository.py     # Generic Bitable CRUD base class
+    lark_repository.py     # BaseRepository — Bitable CRUD 基类 (findOne/createOne/updateOne/deleteOne/list/batch_update)
+    query_wrapper.py       # QueryWrapper 链式查询构建器 (eq/ne/not_empty/in_list/order_by/select)
+    update_wrapper.py      # UpdateWrapper 链式更新构建器 (.eq().set().set_all().with_label())
+    collection_utils.py    # 集合操作工具 (pluck/to_map/filter_by/group_by/partition)
+    assert_utils.py        # 断言工具 (assert_in/assert_not_blank/assert_not_none/assert_true)
     bitable_fields.py      # Global Bitable field type registry (text/number/datetime/link/select)
-    bitable_query.py       # BitableQuery chainable filter builder
     relation_loader.py     # RelationLoader + RelationConfig (批量关联字段解析, 消除 N+1)
     response.py            # Unified response envelope {code, data, message}
     exceptions.py          # AppError, NotFoundError, LarkApiError
@@ -66,17 +69,20 @@ app/
     warehouse_deliver_config.py  # Deliver config 领域服务
     edo.py                 # EDO 领域服务 (Shipping Line/Empty Park 缓存 + dict_values)
     ...                    # Other domain services
-    sync/                  # Sync services (vessel/container/clear/vbs)
-      base.py               # 共享类型 (FieldMapping/LinkConfig/BatchCondition/OverwritePolicy) + 共享逻辑 (build_update_fields/batch_write_back/LinkResolver)
-      vessel_sync.py       # VesselSyncService + BatchCondition
-      container_sync.py    # ContainerSyncService + BatchCondition
-      clear_sync.py        # ClearSyncService + MultiProviderBatchCondition
-      vbs_sync.py          # VbsSyncService + MultiProviderBatchCondition (VBS Terminal 路由)
-      model/               # Sync schemas
-        vessel_sync_schemas.py
-        container_sync_schemas.py
-        clear_sync_schemas.py
-        vbs_sync_schemas.py
+    sync/                  # Sync services — 模板模式 + 按职责分层
+      workflow/             # 抽象骨架层
+        sync_template.py    # SyncTemplate 三步模板 (fetch_records → fetch_provider_data → build_update_wrappers → _persist)
+        sync_data.py        # SyncData 基类 (Pydantic → UpdateWrapper 自动转换)
+        batch_sync_result.py # BatchSyncResult (total/synced/errors)
+      scene/                # 场景实现层
+        vbs/                # VBS 码头同步 (5 个码头各一个 SyncTemplate 子类)
+        vessel/             # 船期同步
+        container/          # 集装箱状态同步
+        clear/              # 清关状态同步
+      constants/            # 各域查询条件常量
+      utils/                # datetime_parser (safe_ts), link_config, link_resolver
+      request/              # 请求对象 (Pydantic)
+      factory/              # VBS 策略工厂
     model/                 # 共享数据模型 (schemas/config 跨 service 使用)
       cartage_writeback_config.py  # WritebackFieldRule, OP_IMPORT/EXPORT_RULES
       cartage_writeback_schemas.py # CartageWritebackResult, WritebackRecordRef, SkippedContainer
@@ -122,25 +128,34 @@ app/
 - EDO Writeback Pattern: 按 Container Number 查找 Op-Import → UPDATE 写入 EDO PIN / Shipping Line(link) / Empty Park(link) / Record Status / Source EDO
 - RelationLoader Pattern: 批量关联字段解析 — 收集 record_id → 并发 batch_get → 注入回主记录，消除 N+1 串行调用
 - Component Provider Pattern: 外部网站爬虫 Provider，每个 Provider 独立实现登录+抓取+解析，目前 4 个: VBS/Hutchison/1-Stop/ContainerChain
-- Sync Module Three-Step Pattern: 所有爬虫同步模块统一遵循：
-  1. **数据来源**（二选一）：手动传入业务标识 → `sync()`；或声明式 `BatchCondition`（name + description + query + write_fields）注册到 dict → `sync_batch()` 自动筛选
-  2. **调 Provider 拿数据**：单 Provider 或多 Provider 路由（按业务字段如 Terminal 路由，支持 fallback），路由逻辑在 service 层
-  3. **批量写回 Bitable**：`batch_update_records` → 失败回退逐条；声明式 `FieldMapping`（provider_key → bitable_field + overwrite policy）配置驱动
-  - 已实现：Vessel（1-Stop → Op-Vessel Schedule）、Container（1-Stop → Op-Import）、Clear（按 Terminal 路由 1-Stop customs / Hutchison → Op-Import）、VBS（按 Terminal 路由 5 个 VBS operation → Op-Import）
-- BitableQuery Unified Pattern: 唯一条件定义机制，禁止 filter_fn 双轨制：
-  - 每个子句同时存储 `filter_expr`(服务端) 和 `predicate`(客户端)
-  - `build()` → 服务端 filter_expr（预筛选，减少数据拉取）
-  - `filter(records)` → 客户端 Python 精筛（保证正确性，处理 Bitable 无法表达的条件如 `ETA < now()`）
-  - `.any_empty(fields)` — 任一字段为空 → `OR(f1="", f2="", ...)`
-  - `.not_in_or_empty(field, values)` — 字段为空或不在列表中 → `OR(field="", AND(field!="v1", ...))`
-  - `.client_filter(predicate)` — 纯客户端筛选条件（如 `ETA < now()`）
-  - Bitable **不支持 `NOT`** — 为空用 `=""`，非空用 `!=""`
+- SyncTemplate Pattern (模板方法): 所有爬虫同步模块统一遵循 `SyncTemplate` 三步骨架：
+  1. `fetch_records(condition)` — 从 Bitable 筛选待同步记录（用 `_CONDITIONS` dict + `assert_in` 校验）
+  2. `fetch_provider_data(records)` — 调外部 Provider，返回 `list[SyncData]`（用 `pluck` / `to_map` / `safe_ts`）
+  3. `build_update_wrappers(data_list)` — `SyncData.to_update_wrapper()` 自动转换（Pydantic alias → 飞书列名）
+  - `_persist()` 写回 Bitable: `batch_update` → 失败回退逐条 `updateOne`
+  - 已实现：Vessel、Container、Clear、VBS（5 个码头各一个 SyncTemplate 子类）
+- SyncData Pattern: Pydantic BaseModel 声明式定义「外部数据 → 飞书字段」映射
+  - `_metadata_fields()` — 排除不写回的字段（record_id, container_number 等）
+  - `alias` — Python 字段名 → 飞书列名（如 `eta` → `"ETA"`）
+  - `to_update_wrapper()` — 自动 exclude_none + exclude metadata + by_alias → `UpdateWrapper`
+- QueryWrapper Pattern (MyBatis-Plus 风格): 链式查询条件构建器，替代旧 BitableQuery
+  - 每个子句同时存储 `condition_node`(服务端 search API filter) 和 `predicate`(客户端精筛)
+  - `eq("record_id", rid)` / `in_list("record_id", ids)` 特殊处理：不走 search API，走直连 GET/batch_get
+  - `.select("field1", "field2")` — 指定返回字段
+  - `.order_by("field", desc=True)` — 排序
+  - `.any_empty(fields)` / `.not_in_or_empty(field, values)` — 组合条件
+  - `.client_filter(predicate)` — 纯客户端筛选（如 `ETA < now()`）
+- UpdateWrapper Pattern (MyBatis-Plus 风格): 链式更新构建器
+  - `.eq("record_id", rid).set("field", value).set_all(fields).with_label("CN")` — 链式调用
+  - `with_label()` 仅用于日志标记，不写入 Bitable
+- BaseRepository Pattern: 统一的 Bitable CRUD 基类
+  - 单条操作带 One 后缀: `findOne` / `createOne` / `updateOne` / `deleteOne`
+  - 批量操作: `list` / `page` / `batch_create` / `batch_update` / `batch_delete`
+  - `list_fields()` → `list[FieldMeta]`（frozen dataclass，非 dict）
 - Clear Provider Routing Pattern: 按 Terminal Full Name 选择 Provider：空→1-Stop customs fallback Hutchison；HUTCHISON PORTS - PORT BOTANY→只 Hutchison；其他→只 1-Stop customs
 - VBS Terminal Routing Pattern: 按 Terminal Full Name 路由到 VBS operation：DP WORLD NS→dpWorldNSW / DP WORLD VI→dpWorldVIC / PATRICK NS→patrickNSW / PATRICK VI→patrickVIC / VICTORIA INTERNATIONAL→victVIC；Patrick VIC 的 HTML 使用 `MovementDetailsForm` 前缀（其他码头用 `ContainerVesselDetailsForm`），字段名也不同：ImportAvailability→ContainerAvailability, StorageStartDate→ContainerStorageStart；日期格式含秒需多格式尝试
-- OverwritePolicy Pattern: 字段覆盖策略配置驱动 — ALWAYS(有值就覆盖)/NON_EMPTY(空值不覆盖,默认)/ONCE(已有值不覆盖)；FieldMapping 的 overwrite 字段控制行为，build_update_fields 自动执行
-- Bitable Field Type Registry Pattern: `bitable_fields.py` 全局注册所有字段类型，FieldMapping 从注册表自动推导 field_type，不再重复声明
-- Sync Base Shared Logic Pattern: `service/sync/base.py` 集中定义 FieldMapping/LinkConfig/BatchCondition/OverwritePolicy/LinkResolver + 共享函数 build_update_fields/batch_write_back/parse_datetime_to_timestamp，所有 sync 模块复用
-- LinkFieldResolver + filter_expr Pattern: 支持 `filter_expr` 模板渲染（从 context 注入变量），生成 `AND(主条件, 渲染后条件)` 复合过滤，用于 Vessel Name + Voyage 等复合唯一键查找
+- Collection Utils Pattern: `pluck` / `to_map` / `filter_by` / `group_by` / `partition` 消除 sync 场景中的重复集合操作
+- Assert Utils Pattern: `assert_in` / `assert_not_blank` / `assert_not_none` / `assert_true` 消除重复断言代码
 - Centralized Lark Client: 所有 Lark API 调用通过统一模块
 - Token Auto-refresh: tenant_access_token 自动刷新
 - Fail Fast: 环境变量启动时校验
@@ -229,4 +244,4 @@ app/
 | AI_MODEL | 智谱模型名 | No (default: glm-5v-turbo) |
 
 ---
-*最后更新: 2026-04-21*
+*最后更新: 2026-04-22*

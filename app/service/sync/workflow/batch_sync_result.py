@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from pydantic import BaseModel
 
 
-@dataclass
-class BatchSyncResult:
-    """sync_template 内部通用结果，具体业务 service 可转换为对应 schema。"""
+class BatchSyncResult(BaseModel):
+    """同步结果（通用，所有场景共用）。"""
 
     total: int = 0
     synced: int = 0
     errors: int = 0
-    details: list[dict] = field(default_factory=list)

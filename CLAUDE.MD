@@ -285,6 +285,78 @@
 
 ---
 
+## 一.五、公共工具使用规范
+
+### `app/common/` 下的工具必须优先使用，禁止在业务代码中重复实现。
+
+### Repository 层 — `BaseRepository` + `QueryWrapper` + `UpdateWrapper`
+
+所有 Bitable 数据访问必须通过 `BaseRepository` 子类，使用链式构建器：
+
+```python
+# 查询 — QueryWrapper
+records = await repo.list(QueryWrapper().not_empty("Terminal").order_by("ETA"))
+record = await repo.findOne(QueryWrapper().eq("Container Number", "ABCD1234567"))
+
+# 更新 — UpdateWrapper
+await repo.updateOne(
+    UpdateWrapper().eq("record_id", rid).set("Status", "Done").set("Tag", "OK")
+)
+
+# 批量更新
+await repo.batch_update([
+    UpdateWrapper().eq("record_id", r.record_id).set_all(fields).with_label(r.cn)
+    for r in data_list
+])
+
+# 按 record_id 查 — 走直连 API，不走 search
+record = await repo.findOne(QueryWrapper().eq("record_id", rid))
+records = await repo.list(QueryWrapper().in_list("record_id", ids))
+```
+
+**禁止**：
+- 直接传 record_id 字符串给查询/删除方法（必须用 `QueryWrapper.eq("record_id", ...)`)
+- 手动拼 filter dict（必须用 `QueryWrapper` 链式方法）
+- 在 service 中直接构造 `AppTableRecord`（由 `BaseRepository` 内部转换）
+
+### 集合操作 — `collection_utils`
+
+```python
+from app.common.collection_utils import pluck, to_map, filter_by, group_by, partition
+
+cns = pluck(records, "Container Number")           # 提取非空字段值列表
+cn_to_rid = to_map(records, "Container Number")    # 字段 → record_id 映射
+records = filter_by(all_records, "CN", cn_set)      # 按字段值集合过滤
+grouped = group_by(records, lambda r: r.get("Terminal"))  # 按函数分组
+yes, no = partition(records, lambda r: ...)          # 按谓词分两组
+```
+
+**禁止**：在业务代码中重复写 `[v for r in records if (v := r.get(field))]` 等模式。
+
+### 断言 — `assert_utils`
+
+```python
+from app.common.assert_utils import assert_in, assert_not_blank, assert_not_none
+
+query = assert_in(condition, _CONDITIONS, f"未知条件 '{condition}'")
+assert_not_blank(vessel_name, f"记录 {rid} 缺少 Vessel Name")
+assert_not_none(value, "参数不能为空")
+```
+
+**禁止**：在业务代码中重复写 `if x is None: raise ValueError(...)` 三行断言模式。
+
+### 时间戳转换 — `safe_ts`
+
+```python
+from app.service.sync.utils.datetime_parser import safe_ts
+
+eta = safe_ts(raw, "ETA")  # 从 dict 取值并转毫秒时间戳，空值返回 None
+```
+
+**禁止**：在各模块中重复定义 `_ts()` 辅助函数。
+
+---
+
 ## 二、标准分层调用方向
 
 唯一允许的主链路如下：

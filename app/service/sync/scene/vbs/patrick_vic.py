@@ -2,24 +2,20 @@ from __future__ import annotations
 
 import logging
 
+from app.common.assert_utils import assert_in
+from app.common.collection_utils import pluck, to_map
 from app.component.VbsSearchProvider import VbsSearchProvider
 from app.repository.import_ import ImportRepository
 from app.service.sync.constants.vbs_constants import _CONDITIONS
 from app.service.sync.scene.vbs.vbs_data import VbsData
-from app.service.sync.utils.datetime_parser import parse_datetime_to_timestamp
+from app.service.sync.utils.datetime_parser import safe_ts
 from app.service.sync.workflow.sync_template import SyncTemplate
 
 logger = logging.getLogger(__name__)
 
 
 class PatrickVicVbsSync(SyncTemplate):
-    """PATRICK, VI, EAST SWANSON 的 VBS 同步。
-
-    provider 负责 VBS 爬取；本类负责：
-    - 筛选属于本码头的记录
-    - 以 patrickVIC operation 查询 VBS
-    - 将结果写回 Bitable
-    """
+    """PATRICK, VI, EAST SWANSON 的 VBS 同步。"""
 
     TERMINAL_FULL_NAME = "PATRICK, VI, EAST SWANSON"
     OPERATION = "patrickVIC"
@@ -37,44 +33,36 @@ class PatrickVicVbsSync(SyncTemplate):
         return self._repo
 
     async def fetch_records(self, condition: str) -> list[dict]:
-        query = _CONDITIONS.get(condition)
-        if query is None:
-            available = ", ".join(_CONDITIONS.keys())
-            raise ValueError(f"未知条件 '{condition}'，可用条件: {available}")
+        query = assert_in(condition, _CONDITIONS, f"未知条件 '{condition}'，可用: {', '.join(_CONDITIONS)}")
 
         all_records = await self._repo.list(query)
         records = [
-            r for r in pending
+            r for r in all_records
             if (r.get("Terminal Full Name") or "").strip().upper() == self.TERMINAL_FULL_NAME
         ]
         logger.info("VBS 批量同步 [%s/%s]: %d 条", self.OPERATION, condition, len(records))
         return records
 
     async def fetch_provider_data(self, records: list[dict]) -> list[VbsData]:
-        container_numbers = [cn for r in records if (cn := r.get("Container Number"))]
-        if not container_numbers:
+        cns = pluck(records, "Container Number")
+        if not cns:
             return []
 
-        cn_to_record_id = {r.get("Container Number"): r["record_id"] for r in records if r.get("Container Number")}
-        raw_data = await self._vbs.get_ctn_info_by_list(container_numbers, self.OPERATION)
+        cn_to_rid = to_map(records, "Container Number",'record_id')
+        raw_data = await self._vbs.get_ctn_info_by_list(cns, self.OPERATION)
 
         result: list[VbsData] = []
-        for cn in container_numbers:
-            record_id = cn_to_record_id.get(cn)
+        for cn in cns:
+            rid = cn_to_rid.get(cn)
             raw = raw_data.get(cn)
-            if not record_id or not raw:
+            if not rid or not raw:
                 continue
             result.append(VbsData(
-                record_id=record_id,
+                record_id=rid,
                 container_number=cn,
                 operation=self.OPERATION,
-                estimated_arrival=_ts(raw, "EstimatedArrival"),
-                import_availability=_ts(raw, "ImportAvailability"),
-                storage_start_date=_ts(raw, "StorageStartDate"),
+                estimated_arrival=safe_ts(raw, "EstimatedArrival"),
+                import_availability=safe_ts(raw, "ImportAvailability"),
+                storage_start_date=safe_ts(raw, "StorageStartDate"),
             ))
         return result
-
-
-def _ts(raw: dict, key: str) -> int | None:
-    v = raw.get(key)
-    return parse_datetime_to_timestamp(str(v)) if v else None
