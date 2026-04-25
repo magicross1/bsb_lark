@@ -271,6 +271,7 @@ class LLMService:
         self,
         *,
         model: str | None = None,
+        max_concurrency: int = 5,
     ) -> list[EdoWritebackResult]:
         from app.core.lark_bitable_value import extract_attachment_file_tokens, extract_cell_text
         from app.repository.import_ import ImportRepository
@@ -283,29 +284,36 @@ class LLMService:
         )
 
         pending = [r for r in records if r.get("EDO File") and not extract_cell_text(r.get("Record Status"))]
+        if not pending:
+            return []
 
         _logger = logging.getLogger(__name__)
-        results: list[EdoWritebackResult] = []
-        for r in pending:
+        _logger.info("EDO 批量触发: %d 条待处理，并发=%d", len(pending), max_concurrency)
+        semaphore = asyncio.Semaphore(max_concurrency)
+        results: list[EdoWritebackResult | None] = [None] * len(pending)
+
+        async def _process(idx: int, r: dict) -> None:
             rid = r["record_id"]
             edo_file_field = r.get("EDO File")
             file_tokens = extract_attachment_file_tokens(edo_file_field)
             if not file_tokens:
-                continue
+                return
 
-            tmp_path = await import_repo.download_attachment(file_tokens[0])
-            try:
-                dv = await self._edo.build_dict_values()
-                parsed = await self._edo_llm.parse(str(tmp_path), model=model, dict_values=dv)
-                enriched = await self._edo_enrichment.enrich(parsed)
-                writeback = await self._edo_writeback.writeback_from_record(enriched, source_record_id=rid)
-                results.append(writeback)
-            except Exception as e:
-                _logger.error("Failed to process EDO record %s: %s", rid, e)
-            finally:
-                tmp_path.unlink(missing_ok=True)
+            async with semaphore:
+                tmp_path = await import_repo.download_attachment(file_tokens[0])
+                try:
+                    dv = await self._edo.build_dict_values()
+                    parsed = await self._edo_llm.parse(str(tmp_path), model=model, dict_values=dv)
+                    enriched = await self._edo_enrichment.enrich(parsed)
+                    writeback = await self._edo_writeback.writeback_from_record(enriched, source_record_id=rid)
+                    results[idx] = writeback
+                except Exception as e:
+                    _logger.error("Failed to process EDO record %s: %s", rid, e)
+                finally:
+                    tmp_path.unlink(missing_ok=True)
 
-        return results
+        await asyncio.gather(*[_process(i, r) for i, r in enumerate(pending)])
+        return [r for r in results if r is not None]
 
     def clear_cartage_cache(self) -> None:
         self._cartage.clear_cache()
