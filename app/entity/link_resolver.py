@@ -46,8 +46,6 @@ class LinkFieldResolver:
         context: dict[str, Any] | None = None,
     ) -> list[str] | None:
         if not value:
-            if lookup.default_if_missing:
-                return None
             return None
 
         cache_key = self._cache_key(lookup, value, context)

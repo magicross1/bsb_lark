@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ from zhipuai import ZhipuAI
 
 from app.config.app_settings import settings
 from app.core.llm import get_llm_client, model_requires_thinking
+
+logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff"}
 PDF_EXTENSIONS = {".pdf"}
@@ -35,13 +38,18 @@ def image_to_base64(image_path: str | Path) -> str:
 
 def extract_json_from_response(raw: str) -> dict[str, Any] | None:
     json_str = raw
-    if "```json" in raw:
-        json_str = raw.split("```json")[1].split("```")[0].strip()
-    elif "```" in raw:
-        json_str = raw.split("```")[1].split("```")[0].strip()
     try:
+        if "```json" in raw:
+            parts = raw.split("```json", 1)
+            if len(parts) > 1 and "```" in parts[1]:
+                json_str = parts[1].split("```", 1)[0].strip()
+        elif "```" in raw:
+            parts = raw.split("```", 2)
+            if len(parts) > 1:
+                json_str = parts[1].strip()
         return json.loads(json_str)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, IndexError):
+        logger.warning("LLM 响应 JSON 解析失败，原始长度=%d, 前200字符: %s", len(raw), raw[:200])
         return None
 
 

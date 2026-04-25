@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from app.config.app_settings import settings
 from app.service.llm_service.cartage.schemas import CartageDictValues, CartageParseResult
 
 # 文档入口：按扩展名区分多模态文件与纯文本
@@ -17,7 +18,7 @@ class CartageLlmService:
         self,
         source: str | Path,
         *,
-        model: str = "glm-5v-turbo",
+        model: str = settings.AI_MODEL,
         dict_values: CartageDictValues | None = None,
     ) -> CartageParseResult:
         from app.service.llm_service.cartage.parser import CartageParser
@@ -36,7 +37,7 @@ class CartageLlmService:
         self,
         text: str,
         *,
-        model: str = "glm-5v-turbo",
+        model: str = settings.AI_MODEL,
         dict_values: CartageDictValues | None = None,
     ) -> CartageParseResult:
         from app.service.llm_service.cartage.parser import CartageParser

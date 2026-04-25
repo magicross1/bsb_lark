@@ -98,10 +98,18 @@ OP_IMPORT_RULES: list[WritebackFieldRule] = [
     WritebackFieldRule(
         bitable_field="Container Type",
         source_key="container_type",
+        link_lookup=LinkLookup(
+            target_table_id=T.dt_container_type.id,
+            search_field="Container Type",
+        ),
     ),
     WritebackFieldRule(
         bitable_field="Commodity",
         source_key="commodity",
+        link_lookup=LinkLookup(
+            target_table_id=T.dt_commodity.id,
+            search_field="Commodity",
+        ),
     ),
     WritebackFieldRule(
         bitable_field="Container Weight",
@@ -153,9 +161,17 @@ OP_EXPORT_RULES: list[WritebackFieldRule] = [
     WritebackFieldRule(
         bitable_field="Container Type",
         source_key="container_type",
+        link_lookup=LinkLookup(
+            target_table_id=T.dt_container_type.id,
+            search_field="Container Type",
+        ),
     ),
     WritebackFieldRule(
         bitable_field="Commodity",
         source_key="commodity",
+        link_lookup=LinkLookup(
+            target_table_id=T.dt_commodity.id,
+            search_field="Commodity",
+        ),
     ),
 ]

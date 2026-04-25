@@ -78,7 +78,7 @@ class CartageService:
         cached = c.get(key)
         if cached is None:
             records = await self._warehouse_address_repo.list(
-                field_names=["Address"],
+                QueryWrapper().select("Address"),
             )
             c.set(key, records)
             return records
@@ -90,7 +90,7 @@ class CartageService:
         cached = c.get(key)
         if cached is None:
             records = await self._warehouse_deliver_config_repo.list(
-                field_names=["Deliver Config", "Deliver Type", "Warehouse Address"],
+                QueryWrapper().select("Deliver Config", "Deliver Type", "Warehouse Address"),
             )
             c.set(key, records)
             return records
@@ -102,7 +102,7 @@ class CartageService:
         cached = c.get(key)
         if cached is None:
             records = await self._consingee_repo.list(
-                field_names=["Name", "MD-Warehouse Address"],
+                QueryWrapper().select("Name", "MD-Warehouse Address"),
             )
             c.set(key, records)
             return records
@@ -417,8 +417,6 @@ class CartageService:
                     )
                     if link_ids:
                         fields[rule.bitable_field] = link_ids
-                    elif rule.required and rule.default_value:
-                        fields[rule.bitable_field] = rule.default_value
                 continue
 
             if value is not None and value != "":
@@ -426,4 +424,5 @@ class CartageService:
             elif rule.required:
                 fields[rule.bitable_field] = rule.default_value or "TBC"
 
+        logger.debug("_build_fields result: %s", {k: type(v).__name__ + '=' + str(v)[:50] for k, v in fields.items()})
         return fields

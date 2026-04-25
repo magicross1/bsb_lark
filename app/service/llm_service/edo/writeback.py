@@ -88,7 +88,7 @@ class EdoWritebackService:
         if not first_used and updated:
             if not any(e.record_id == source_record_id for e in updated):
                 source_record = await self._import_repo.findOne(QueryWrapper().eq("record_id", source_record_id))
-                source_cn = source_record.get("Container Number", "")
+                source_cn = source_record.get("Container Number", "") if source_record else ""
                 skipped.append(
                     EdoWritebackEntryRef(
                         record_id=source_record_id,

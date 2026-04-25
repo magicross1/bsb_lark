@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, UploadFile
 
 from app.common.response import ApiResponse
+from app.config.app_settings import settings
 from app.service.llm_service.llm_service import llm_service
 
 cartage_router = APIRouter(prefix="/cartage", tags=["Cartage Operations"])
@@ -22,7 +23,7 @@ router = APIRouter()
 @cartage_router.post("/parse")
 async def parse_cartage_document(
     file: UploadFile = File(..., description="PDF, image, or TXT file"),  # noqa: B008
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     allowed = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".txt", ".text"}
@@ -45,7 +46,7 @@ async def parse_cartage_document(
 @cartage_router.post("/parse-text")
 async def parse_cartage_text(
     text: str = Form(..., description="Cartage document text content"),
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     result = await llm_service.parse_cartage_text(text, model=model)
     return ApiResponse.ok(data=result.model_dump())
@@ -54,7 +55,7 @@ async def parse_cartage_text(
 @cartage_router.post("/process")
 async def process_cartage_document(
     file: UploadFile = File(..., description="PDF, image, or TXT file"),  # noqa: B008
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     allowed = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".txt", ".text"}
@@ -77,7 +78,7 @@ async def process_cartage_document(
 @cartage_router.post("/process-text")
 async def process_cartage_text(
     text: str = Form(..., description="Cartage document text content"),
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     result = await llm_service.process_cartage_text(text, model=model)
     return ApiResponse.ok(data=result.model_dump())
@@ -95,7 +96,7 @@ async def trigger_cartage_from_record(
         default="",
         description="Op-Cartage record_id. Leave empty to auto-discover.",
     ),
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     if record_id:
         try:
@@ -116,7 +117,7 @@ async def trigger_cartage_from_record(
 @cartage_router.post("/writeback")
 async def writeback_cartage_document(
     file: UploadFile = File(..., description="PDF, image, or TXT file"),  # noqa: B008
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     allowed = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".txt", ".text"}
@@ -144,7 +145,7 @@ async def writeback_cartage_document(
 @cartage_router.post("/writeback-text")
 async def writeback_cartage_text(
     text: str = Form(..., description="Cartage document text content"),
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     enriched, writeback = await llm_service.process_and_writeback_cartage_text(text, model=model)
     return ApiResponse.ok(
@@ -161,7 +162,7 @@ async def writeback_cartage_text(
 @edo_router.post("/parse")
 async def parse_edo_document(
     file: UploadFile = File(..., description="PDF or image file"),  # noqa: B008
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     allowed = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".txt", ".text"}
@@ -184,7 +185,7 @@ async def parse_edo_document(
 @edo_router.post("/process")
 async def process_edo_document(
     file: UploadFile = File(..., description="PDF or image file"),  # noqa: B008
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     allowed = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".txt", ".text"}
@@ -207,7 +208,7 @@ async def process_edo_document(
 @edo_router.post("/process-text")
 async def process_edo_text(
     text: str = Form(..., description="EDO document text content"),
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     result = await llm_service.process_edo_text(text, model=model)
     return ApiResponse.ok(data=result.model_dump())
@@ -222,7 +223,7 @@ async def clear_edo_cache():
 @edo_router.post("/trigger")
 async def trigger_edo_from_record(
     record_id: str = Form(default="", description="Op-Import record_id. Leave empty to auto-discover."),
-    model: str = Form(default="glm-5v-turbo"),
+    model: str = Form(default=settings.AI_MODEL),
 ):
     if record_id:
         try:

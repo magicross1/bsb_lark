@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
 from app.cache.factory import CacheFactory
+from app.config.app_settings import settings
 from app.service.cartage.cartage import CartageService
 from app.service.cartage.model.cartage_writeback_schemas import CartageWritebackResult
 from app.service.edo.edo import EdoService
@@ -85,7 +87,7 @@ class LLMService:
         self,
         source: str | Path,
         *,
-        model: str = "glm-5v-turbo",
+        model: str = settings.AI_MODEL,
         dict_values: CartageDictValues | None = None,
     ) -> CartageParseResult:
         return await self._cartage_llm.parse_document(source, model=model, dict_values=dict_values)
@@ -94,7 +96,7 @@ class LLMService:
         self,
         text: str,
         *,
-        model: str = "glm-5v-turbo",
+        model: str = settings.AI_MODEL,
         dict_values: CartageDictValues | None = None,
     ) -> CartageParseResult:
         return await self._cartage_llm.parse_text(text, model=model, dict_values=dict_values)
@@ -103,7 +105,7 @@ class LLMService:
         self,
         source: str | Path,
         *,
-        model: str = "glm-5v-turbo",
+        model: str = settings.AI_MODEL,
         dict_values: CartageDictValues | None = None,
     ) -> CartageProcessResult:
         parsed = await self._cartage_llm.parse_document(source, model=model, dict_values=dict_values)
@@ -113,7 +115,7 @@ class LLMService:
         self,
         text: str,
         *,
-        model: str = "glm-5v-turbo",
+        model: str = settings.AI_MODEL,
         dict_values: CartageDictValues | None = None,
     ) -> CartageProcessResult:
         parsed = await self._cartage_llm.parse_text(text, model=model, dict_values=dict_values)
@@ -123,7 +125,7 @@ class LLMService:
         self,
         source: str | Path,
         *,
-        model: str = "glm-5v-turbo",
+        model: str = settings.AI_MODEL,
         dict_values: CartageDictValues | None = None,
     ) -> tuple[CartageProcessResult, CartageWritebackResult]:
         parsed = await self._cartage_llm.parse_document(source, model=model, dict_values=dict_values)
@@ -135,7 +137,7 @@ class LLMService:
         self,
         text: str,
         *,
-        model: str = "glm-5v-turbo",
+        model: str = settings.AI_MODEL,
         dict_values: CartageDictValues | None = None,
     ) -> tuple[CartageProcessResult, CartageWritebackResult]:
         parsed = await self._cartage_llm.parse_text(text, model=model, dict_values=dict_values)
@@ -147,7 +149,7 @@ class LLMService:
         self,
         record_id: str,
         *,
-        model: str = "glm-5v-turbo",
+        model: str = settings.AI_MODEL,
         dict_values: CartageDictValues | None = None,
     ) -> tuple[CartageProcessResult, CartageWritebackResult]:
         """Trigger Cartage processing from an existing Op-Cartage record.
@@ -183,12 +185,14 @@ class LLMService:
     async def trigger_pending_cartage_records(
         self,
         *,
-        model: str = "glm-5v-turbo",
+        model: str = settings.AI_MODEL,
         dict_values: CartageDictValues | None = None,
+        max_concurrency: int = 5,
     ) -> list[CartageWritebackResult]:
         """Auto-discover and process all pending Op-Cartage records.
 
         Pending = Cartage Advise is not empty AND Record Status is empty.
+        使用 Semaphore 控制并发数（默认 5，GLM-4.6V 最大 10）。
         """
         from app.core.lark_bitable_value import extract_attachment_file_tokens, extract_cell_text
         from app.repository.cartage import CartageRepository
@@ -201,28 +205,35 @@ class LLMService:
         )
 
         pending = [r for r in records if r.get("Cartage Advise") and not extract_cell_text(r.get("Record Status"))]
+        if not pending:
+            return []
 
-        logger = logging.getLogger(__name__)
-        results: list[CartageWritebackResult] = []
-        for r in pending:
+        _logger = logging.getLogger(__name__)
+        _logger.info("Cartage 批量触发: %d 条待处理，并发=%d", len(pending), max_concurrency)
+        semaphore = asyncio.Semaphore(max_concurrency)
+        results: list[CartageWritebackResult | None] = [None] * len(pending)
+
+        async def _process(idx: int, r: dict) -> None:
             rid = r["record_id"]
             advise_field = r.get("Cartage Advise")
             file_tokens = extract_attachment_file_tokens(advise_field)
             if not file_tokens:
-                continue
+                return
 
-            tmp_path = await cartage_repo.download_attachment(file_tokens[0])
-            try:
-                parsed = await self._cartage_llm.parse_document(str(tmp_path), model=model, dict_values=dict_values)
-                enriched = await self._cartage_enrichment.enrich(parsed)
-                writeback = await self._cartage.writeback_from_record(enriched, source_record_id=rid)
-                results.append(writeback)
-            except Exception as e:
-                logger.error("Failed to process record %s: %s", rid, e)
-            finally:
-                tmp_path.unlink(missing_ok=True)
+            async with semaphore:
+                tmp_path = await cartage_repo.download_attachment(file_tokens[0])
+                try:
+                    parsed = await self._cartage_llm.parse_document(str(tmp_path), model=model, dict_values=dict_values)
+                    enriched = await self._cartage_enrichment.enrich(parsed)
+                    writeback = await self._cartage.writeback_from_record(enriched, source_record_id=rid)
+                    results[idx] = writeback
+                except Exception as e:
+                    _logger.error("Failed to process record %s: %s", rid, e)
+                finally:
+                    tmp_path.unlink(missing_ok=True)
 
-        return results
+        await asyncio.gather(*[_process(i, r) for i, r in enumerate(pending)])
+        return [r for r in results if r is not None]
 
     async def trigger_edo_from_record(
         self,
