@@ -183,8 +183,8 @@ def _parse_check_add_ctn(raw_html_list):
         if ctn_number:
             result[ctn_number] = {
                 "CTN NUMBER": ctn_number,
-                "1-STOP": one_stop,
-                "EDO PIN MATCH": edo_pin_match,
+                "Add Container": one_stop,
+                "EDO Pin Match": edo_pin_match,
             }
     return result
 

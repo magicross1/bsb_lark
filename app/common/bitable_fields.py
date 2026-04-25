@@ -50,6 +50,12 @@ FIELD_TYPES: dict[str, str] = {
     "Container Type": "select",
     "Commodity": "select",
     "Container Weight": "number",
+    "Add Container": "select",
+    "First Free": "datetime",
+    "Last Free": "datetime",
+    "ETA": "datetime",
+    "FULL Vessel In": "link",
+    "Terminal Name": "link",
     # ── Op-Export ────────────────────────────────────────
     "Booking Reference": "text",
     "Release Qty": "number",

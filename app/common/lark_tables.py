@@ -464,6 +464,7 @@ class _Tables:
             "record_status": FieldRef("fldEwvsGtt", "Record Status"),
             "source_edo": FieldRef("fldgijIfl5", "Source EDO"),
             "full_vessel_in": FieldRef("fldxqMZLHT", "Full Vessel In"),
+            "add_container": FieldRef("fldFix50cC", "Add Container"),
         },
     )
 
