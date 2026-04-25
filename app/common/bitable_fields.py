@@ -51,6 +51,7 @@ FIELD_TYPES: dict[str, str] = {
     "Commodity": "select",
     "Container Weight": "number",
     "Add Container": "select",
+    "EDO Pin Match": "select",
     "First Free": "datetime",
     "Last Free": "datetime",
     "ETA": "datetime",

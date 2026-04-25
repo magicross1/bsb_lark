@@ -465,6 +465,7 @@ class _Tables:
             "source_edo": FieldRef("fldgijIfl5", "Source EDO"),
             "full_vessel_in": FieldRef("fldxqMZLHT", "Full Vessel In"),
             "add_container": FieldRef("fldFix50cC", "Add Container"),
+            "edo_pin_match": FieldRef("fldp96OQAY", "EDO Pin Match"),
         },
     )
 
