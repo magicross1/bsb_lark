@@ -4,19 +4,22 @@ import logging
 from typing import Any
 
 from app.common.assert_utils import assert_in, assert_not_blank
+from app.common.collection_utils import to_map
+from app.core.lark_bitable_value import extract_link_record_ids
 from app.common.query_wrapper import QueryWrapper
 from app.component.OneStopProvider import OneStopProvider
+from app.repository.base_node import BaseNodeRepository
+from app.repository.terminal import TerminalRepository
 from app.repository.vessel_schedule import VesselScheduleRepository
 from app.service.sync.constants.vessel_constants import (
     _BASE_NODE_MAP,
     _CONDITIONS,
     _KEY_SEP,
-    _TERMINAL_LINK,
 )
 from app.service.sync.workflow.batch_sync_result import BatchSyncResult
 from app.service.sync.scene.vessel.vessel_data import VesselData
 from app.service.sync.utils.datetime_parser import safe_ts
-from app.service.sync.utils.link_resolver import LinkResolver
+from app.service.sync.utils.link_resolver import LinkResolver, build_select_field_map
 from app.service.sync.workflow.sync_template import SyncTemplate
 
 logger = logging.getLogger(__name__)
@@ -36,10 +39,15 @@ class VesselSyncService(SyncTemplate):
         self,
         vessel_schedule_repo: VesselScheduleRepository | None = None,
         onestop: OneStopProvider | None = None,
+        base_node_repo: BaseNodeRepository | None = None,
+        terminal_repo: TerminalRepository | None = None,
     ) -> None:
         self._repo = vessel_schedule_repo or VesselScheduleRepository()
         self._onestop = onestop or OneStopProvider.get_instance()
+        self._base_node_repo = base_node_repo or BaseNodeRepository()
+        self._terminal_repo = terminal_repo or TerminalRepository()
         self._link_resolver = LinkResolver()
+        self._tfn_map: dict[str, str] | None = None
 
     @property
     def repository(self) -> VesselScheduleRepository:
@@ -55,6 +63,7 @@ class VesselSyncService(SyncTemplate):
         query = assert_in(condition, _CONDITIONS, f"未知条件 '{condition}'，可用: {', '.join(_CONDITIONS)}")
 
         all_records = await self._repo.list(query)
+        all_records = await self._resolve_base_node(all_records)
 
         if base_node:
             all_records = [r for r in all_records if _extract_base_node(r.get("Base Node")) == base_node]
@@ -62,10 +71,32 @@ class VesselSyncService(SyncTemplate):
         logger.info("船期批量同步 [%s]: %d 条", condition, len(all_records))
         return all_records
 
+    async def _resolve_base_node(self, records: list[dict]) -> list[dict]:
+        """批量解析 Base Node link 字段为显示文本。"""
+        all_ids: set[str] = set()
+        for r in records:
+            all_ids.update(extract_link_record_ids(r.get("Base Node")))
+        if not all_ids:
+            return records
+
+        base_node_records = await self._base_node_repo.list(
+            QueryWrapper().in_list("record_id", list(all_ids)).select("Base Node")
+        )
+        id_to_name = to_map(base_node_records, "record_id", "Base Node")
+
+        for r in records:
+            ids = extract_link_record_ids(r.get("Base Node"))
+            if ids:
+                names = [id_to_name.get(rid, "") for rid in ids if id_to_name.get(rid)]
+                r["Base Node"] = names[0] if len(names) == 1 else ", ".join(names) if names else r.get("Base Node")
+        return records
+
     # ── Step 2 ──────────────────────────────────────────────
 
     async def fetch_provider_data(self, records: list[dict]) -> list[VesselData]:
         """按 vessel key 聚合查询，每组共享一次 1-Stop 结果。"""
+        self._tfn_map = await build_select_field_map(self._terminal_repo, "Terminal Full Name")
+
         grouped = _group_by_vessel_key(records)
 
         vessel_data_map: dict[str, dict | None] = {}
@@ -108,9 +139,9 @@ class VesselSyncService(SyncTemplate):
 
     async def _resolve_terminal_link(self, raw: dict[str, Any]) -> list[str] | None:
         tfn = raw.get("Terminal Full Name")
-        if not tfn:
+        if not tfn or not self._tfn_map:
             return None
-        record_id = await self._link_resolver.resolve(_TERMINAL_LINK, str(tfn))
+        record_id = self._tfn_map.get(str(tfn).strip().upper())
         return [record_id] if record_id else None
 
     # ── 对外接口 ─────────────────────────────────────────────
@@ -118,6 +149,7 @@ class VesselSyncService(SyncTemplate):
     async def sync_single(self, record_id: str) -> BatchSyncResult:
         """手动触发：同步单条船期记录。"""
         record = await self._repo.findOne(QueryWrapper().eq("record_id", record_id))
+        record = (await self._resolve_base_node([record]))[0]
         vessel_name = record.get("Vessel Name")
         voyage = record.get("Voyage")
         base_node = _extract_base_node(record.get("Base Node"))

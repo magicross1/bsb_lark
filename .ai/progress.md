@@ -3,7 +3,7 @@
 > 项目开发进度日志。AI 从这里知道"做到哪了"。
 
 ## Current Sprint / Phase
-Sync 三模块统一重构完成 — BatchCondition write_fields 模式
+远程仓库重构同步 + 4 个 Sync 模块 E2E 测试全部通过
 
 ## Changelog
 
@@ -701,3 +701,148 @@ Sync 三模块统一重构完成 — BatchCondition write_fields 模式
 1. ContainerChainProvider 集成
 2. 4 个 Provider 统一接口抽象
 3. 账号密码配置化
+
+---
+
+### [2026-04-22] 远程仓库重大重构同步 — QueryWrapper/UpdateWrapper + SyncTemplate/SyncData
+**变更来源**: 同事 2 个 commit (5d42a3c, bfaab75)
+
+**架构调整**:
+
+- **Repository 层 MyBatis-Plus 风格重构** — `BitableQuery` → `QueryWrapper` + `UpdateWrapper`
+  - `QueryWrapper` 链式查询构建器：每个子句同时存储 `condition_node`(服务端) + `predicate`(客户端)
+  - `UpdateWrapper` 链式更新构建器：`.eq().set().set_all().with_label()`
+  - `BaseRepository` 统一接口：`findOne/updateOne/deleteOne` 都接收 Wrapper
+  - `eq("record_id", rid)` / `in_list("record_id", ids)` 特殊处理：不走 search API，走直连 GET/batch_get
+  - 删除 `app/common/bitable_query.py`
+
+- **Sync 模板模式重构** — `base.py` → `SyncTemplate` + `SyncData` + 按职责分层
+  - `SyncTemplate` 模板方法：`fetch_records → fetch_provider_data → build_update_wrappers → _persist`
+  - `SyncData` Pydantic 基类：`alias` 声明字段映射，`to_update_wrapper()` 自动转换
+  - `BatchSyncResult(total/synced/errors)` 统一结果
+  - 目录分层：`workflow/`(骨架) + `scene/`(场景实现) + `constants/`(条件) + `utils/`(工具) + `request/`(请求) + `factory/`(策略工厂)
+  - 删除 `service/sync/base.py` + `vessel_sync.py` + `container_sync.py` + `clear_sync.py` + `vbs_sync.py` + `model/*.py`
+  - 新增 4 个 SyncTemplate 子类：`VesselSyncService`、`ContainerSyncService`、`ClearSyncService`、VBS 5 个码头各一个
+  - 新增 `VbsSyncFactory` 策略工厂 + `VbsSyncService` 委托层
+  - 新增 `LinkConfig` + `LinkResolver`(sync/utils/) — 通用关联字段解析
+  - 新增 `safe_ts`(sync/utils/datetime_parser.py) — 共享时间戳转换
+
+- **集合操作 + 断言工具提取到 common/** — `collection_utils.py` + `assert_utils.py`
+  - `pluck/to_map/filter_by/group_by/partition` 消除重复集合操作
+  - `assert_in/assert_not_blank/assert_not_none/assert_true` 消除重复断言
+  - CLAUDE.md 新增「一.五、公共工具使用规范」章节
+
+**文档同步**:
+- AGENTS.md — 项目结构 + Sync 三步模式规范对齐
+- .ai/architecture.md — 远程已更新
+- .ai/decisions.md — 新增 3 条决策记录
+- .ai/style-guide.md — 远程已更新
+
+### [2026-04-23] 远程重构同步 + Sync 模块 E2E 测试修复
+**做了什么**:
+- **git pull 远程重构代码** — Fast-forward 合并，95 文件 +2419/-2117 行
+- **修复 `extract_linked_ids` 不支持 `link_record_ids` dict 格式** — Bitable link 字段返回 `{"link_record_ids": ["recXXX"]}` 而非显示文本，原函数只处理 str/list
+- **修复 Vessel `Base Node` link 字段解析** — `_record_to_dict` 解析后返回 `{'link_record_ids': [...]}`，新增 `_resolve_base_node()` 用 `RelationLoader` 批量解析
+- **所有 constants 改为纯 `client_filter`** — vessel/container/clear/vbs 4 个 constants 文件，去掉服务端 filter（Bitable OR+嵌套AND 语法有坑），全拉客户端筛
+- **修复 ContainerData 3 个 datetime 字段类型** — `on_board_vessel_time`/`discharge_time`/`gateout_time` 从 `str | None` 改为 `int | None`，`_parse` 方法从 `_str()` 改为 `safe_ts()`
+- **修复 `container_constants._eta_passed` 不支持 int 时间戳** — `EstimatedArrival` 从 Bitable 读回为 int 毫秒时间戳，`_to_datetime()` 统一处理 int/str 两种格式
+- **创建备份分支 `main-local-backup`**（指向 2e02edc）
+
+**E2E 测试结果（4 个 Sync 模块全部通过）**:
+
+| 模块 | 条件 | total | synced | errors |
+|------|------|-------|--------|--------|
+| Vessel | pending_arrival | 2 | 2 | 0 |
+| Vessel | missing_eta | 0 | 0 | 0 |
+| Vessel | all | 9 | 9 | 0 |
+| Container | basic | 1 | 1 | 0 |
+| Container | terminal | 2 | 2 | 0 |
+| Container | vessel_schedule | 1 | 1 | 0 |
+| Container | discharge | 1 | 1 | 0 |
+| Container | gateout | 7 | 7 | 0 |
+| Container | all | 17 | 17 | 0 |
+| Clear | pending | 1 | 1 | 0 |
+| Clear | all | 15 | 15 | 0 |
+| VBS | pending | 11 | 11 | 0 |
+| VBS | all | 11 | 11 | 0 |
+
+### [2026-04-23] _resolve_base_node 重构 — 去除内联 Repo + 不发明方法原则
+**做了什么**:
+- **删除 `_resolve_base_node` 中的内联 `_BaseNodeRepo` 类** — 违反"一表一文件"铁律，方法内动态创建 Repository 绕过了正常的依赖管理
+- **新建 `app/repository/base_node.py`** — 正规的 `BaseNodeRepository(BaseRepository)`，与其他 repo 保持一致
+- **重写 `_resolve_base_node`** — 用已有工具链：`extract_link_record_ids`(提取 record_id) + `BaseNodeRepository.list(in_list("record_id", ids))`(批量查) + `to_map`(构建映射)，不再用 `RelationLoader` + 手动 pop/覆盖
+- **构造函数注入 `BaseNodeRepository`** — 通过参数注入，可测试、可替换
+- **删除 `RelationLoader`/`RelationConfig` import** — 不再需要
+- **AGENTS.md 新增"不发明方法"铁律** — 5 条规则写进 Sync 模块关键约束
+- **decisions.md 新增 3 条决策记录** — 禁止内联 Repo + constants 暂用纯 client_filter + 不发明方法原则
+
+**E2E 验证**: Vessel/Container/Clear/VBS 全部 0 errors
+
+### [2026-04-23] Op-Import 新增 Full Vessel In + PortOfDischarge 改 link
+**做了什么**:
+- **lark_tables.py** — Op-Import 新增 `full_vessel_in`(fldxqMZLHT, "Full Vessel In")；`PortOfDischarge` 已从 text 改为 link（Bitable 侧用户已改）
+- **container_data.py** — `port_of_discharge` 从 `str | None` 改为 `list[str] | None`（link → MD-Base Node）；新增 `full_vessel_in: list[str] | None`（link → Op-Vessel Schedule）
+- **container_sync.py** — `fetch_provider_data` 新增 link 解析：
+  - `PortOfDischarge` 文本 → `LinkResolver` + `LinkConfig(table=T.md_base_node)` 解析为 MD-Base Node record_id
+  - `Full Vessel In` 文本 → `_build_vessel_schedule_map()` 构建 `(Vessel Name|Voyage|Base Node) → record_id` 映射，按三字段精确匹配 Op-Vessel Schedule
+  - Vessel Schedule 的 Base Node 是 link 字段，用 `extract_link_record_ids` + `BaseNodeRepository.list(in_list)` + `to_map` 解析为文本
+- **构造函数注入** `VesselScheduleRepository` + `BaseNodeRepository`
+
+**E2E 验证**: Container sync all=17/17, 0 errors
+
+### [2026-04-23] 多选字段修复 + build_select_field_map 提取 + First Free / Last Free
+**做了什么**:
+- **`_record_to_dict` 保留原始 list** — 多选字段（纯字符串 list）不再拼成逗号字符串，直接返回 `list[str]`，从源头解决多选值含逗号（如 `"DP WORLD, VI, WEST SWANSON"`）被错误拆分的问题
+- **新增 `extract_select_text()`** — `core/lark_bitable_value.py`，统一 `list[str]`/`str`/`None` → 字符串转换，供 `.strip().upper()` 场景使用
+- **新增 `build_select_field_map()`** — `service/sync/utils/link_resolver.py`，通用「A表文本值 → B表多选字段匹配 → record_id」工具函数，自动处理 `list[str]` 和旧格式 `str`
+- **container_sync.py** — 删除 3 个 `_build_xxx_map` 方法，替换为一行 `await build_select_field_map(repo, field)` 调用
+- **vessel_sync.py** — 删除 `_build_terminal_full_name_map`，替换为 `build_select_field_map`
+- **修复 5 个 VBS 文件 + Clear sync** — `(r.get("Terminal Full Name") or "").strip()` → `extract_select_text(r.get("Terminal Full Name")).strip()`
+- **修复 3 个 constants 文件** — `_fv()` 函数适配 `list[str]` 类型
+- **修复 `relation_loader.load_terminal_mapping`** — 多选 TFN 值逐个注册到映射
+- **container_data.py** — `ImportAvailability → First Free`, `StorageStartDate → Last Free` 双字段同步写入
+
+**修复验证**:
+- VICT VIC: Terminal Full Name 双值多选 → Terminal Name 正确链接 ✅
+- DP WORLD, VI, WEST SWANSON: 含逗号的多选值 → Terminal Name 正确链接 ✅
+- PATRICK, VI, EAST SWANSON: 含逗号的多选值 → Terminal Name 正确链接 ✅
+
+**E2E 验证**: vessel 9/9, container 17/17, clear 15/15, vbs 8/8, 0 errors
+
+### [2026-04-23] Terminal Name link + FULL Vessel Name link + ETA datetime
+**做了什么**:
+- **lark_tables.py** — Op-Import 新增 `terminal_name`(fld6cJPAxN, "Terminal Name", link → MD-Terminal)、`eta`(fldvsf9koU, "ETA", datetime)
+- **container_data.py** — 新增 `terminal_name: list[str] | None`（link → MD-Terminal）、`eta: int | None`（datetime 毫秒时间戳）、`full_vessel_name: list[str] | None`（link → Op-Vessel Schedule，与 full_vessel_in 相同值）
+- **container_sync.py**:
+  - 新增 `_build_terminal_full_name_map()` — 从 MD-Terminal 读取 Terminal Full Name（多选字段拆分后逐个注册），构建 `TFN → record_id` 映射
+  - `_parse` 新增 `terminal_name` 解析（TFN 文本 → MD-Terminal record_id）
+  - `full_vessel_name = full_vessel_in`（两个 link 字段指向同一 Op-Vessel Schedule 记录）
+  - `eta = estimated_arrival`（同一时间戳写入两个 datetime 字段）
+  - 构造函数注入 `TerminalRepository`
+
+**验证**:
+- Terminal Name link 正确指向 MD-Terminal（DP WORLD NS PORT BOTANY → recvg0Y7DBJs4k = "Dp World NSW"）✅
+- FULL Vessel Name link 正确指向 Op-Vessel Schedule ✅
+- ETA datetime 正确写入 ✅
+
+**E2E 验证**: 4 个 Sync 模块全部通过 (vessel 9/9, container 17/17, clear 15/15, vbs 9/9, 0 errors)
+
+### [2026-04-23] Commodity link + Container Weight 重写
+**做了什么**:
+- **lark_tables.py** — 新增 `dt_commodity` 表定义（tblKYHYftSjvnKq8），字段：Commodity(文本) + CommodityIn(多选)
+- **repository/dt_commodity.py** — 新建 `DTCommodityRepository`
+- **container_data.py** — `commodity: list[str] | None`（link → DT-Commodity），`container_weight: float | None`
+- **container_sync.py** — `_build_commodity_in_to_commodity_map()` 构建 `CommodityIn → record_id` 映射；`container_weight = gross_weight` 同步写入
+
+**E2E 验证**: Container sync all=17/17, 0 errors
+
+### [2026-04-23] Container Type link — ISO → DT-Container Type 映射
+**做了什么**:
+- **lark_tables.py** — 新增 `dt_container_type` 表定义（tblvJAVKWL3OMoNV），字段：ISO(多选) + Container Type(文本)
+- **repository/dt_container_type.py** — 新建 `DTContainerTypeRepository`
+- **container_data.py** — `container_type` 从 `str | None` 改为 `list[str] | None`（link → DT-Container Type）
+- **container_sync.py** — `_build_iso_to_container_type_map()` 构建 `ISO → record_id` 映射，ISO 多选字段拆分后逐个注册；构造函数注入 `DTContainerTypeRepository`
+
+**映射结果**: ISO 2200/2210/22G0 → 20GP, ISO 4500/4511/45G0 → 40HC, 其余 ISO 无匹配留空
+
+**E2E 验证**: Container sync all=17/17, 0 errors

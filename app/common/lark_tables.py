@@ -446,7 +446,9 @@ class _Tables:
             "detention_days": FieldRef("fld945Ke2j", "Dention Days"),
             "commodity": FieldRef("fld40w6LQV", "Commodity"),
             "import_availability": FieldRef("fldtWj1lfU", "ImportAvailability"),
-            "full_vessel_name": FieldRef("fldiyb1MLi", "FULL Vessel Name"),
+            "full_vessel_name": FieldRef("fldiyb1MLi", "FULL Vessel Name"),  # link → Op-Vessel Schedule
+            "terminal_name": FieldRef("fld6cJPAxN", "Terminal Name"),  # link → MD-Terminal
+            "eta": FieldRef("fldvsf9koU", "ETA"),  # datetime
             "in_voyage": FieldRef("fldeOtdPuE", "InVoyage"),
             "last_free": FieldRef("fld5xRtaq8", "Last Free"),
             "on_board_vessel_time": FieldRef("fldpgV4MeC", "ON_BOARD_VESSEL_Time"),
@@ -461,6 +463,7 @@ class _Tables:
             "clear_status": FieldRef("fld7OEef4K", "Clear Status"),
             "record_status": FieldRef("fldEwvsGtt", "Record Status"),
             "source_edo": FieldRef("fldgijIfl5", "Source EDO"),
+            "full_vessel_in": FieldRef("fldxqMZLHT", "Full Vessel In"),
         },
     )
 
@@ -510,6 +513,24 @@ class _Tables:
             "container_type": FieldRef("fldwIH6QXX", "Container Type"),
             "commodity": FieldRef("fldb9xlopW", "Commodity"),
             "action_status": FieldRef("fldfSfYriY", "Action Status"),
+        },
+    )
+
+    dt_container_type = TableDef(
+        id="tblvJAVKWL3OMoNV",
+        name="DT-Container Type",
+        fields={
+            "iso": FieldRef("fld1XVOXEM", "ISO"),
+            "container_type": FieldRef("fld8Oq0Be1", "Container Type"),
+        },
+    )
+
+    dt_commodity = TableDef(
+        id="tblKYHYftSjvnKq8",
+        name="DT-Commodity",
+        fields={
+            "commodity": FieldRef("fldtA7uHXc", "Commodity"),
+            "commodity_in": FieldRef("fldiJjo4bo", "CommodityIn"),
         },
     )
 

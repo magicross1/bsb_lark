@@ -1,6 +1,21 @@
 from __future__ import annotations
 
 
+def extract_select_text(field: object) -> str:
+    """将多选字段值规整为可读字符串。
+
+    _record_to_dict 对纯字符串 list（多选）保留原始 list，
+    此函数统一 list[str] / str / None → 逗号拼接字符串。
+    """
+    if field is None:
+        return ""
+    if isinstance(field, str):
+        return field.strip()
+    if isinstance(field, list):
+        return ", ".join(str(item) for item in field if item)
+    return str(field)
+
+
 def extract_cell_text(field: object) -> str | None:
     """将飞书多维表格单元格值（字符串 / 多段文本 / 关联展示等）规整为可读字符串。"""
     if field is None:

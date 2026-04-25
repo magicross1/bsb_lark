@@ -7,6 +7,7 @@ from app.common.collection_utils import filter_by, partition, pluck, to_map
 from app.component.HutchisonPortsProvider import HutchisonPortsProvider
 from app.component.OneStopProvider import OneStopProvider
 from app.common.query_wrapper import QueryWrapper
+from app.core.lark_bitable_value import extract_select_text
 from app.repository.import_ import ImportRepository
 from app.service.sync.constants.clear_constants import _CONDITIONS, _HUTCHISON_TERMINAL
 from app.service.sync.workflow.batch_sync_result import BatchSyncResult
@@ -51,7 +52,7 @@ class ClearSyncService(SyncTemplate):
         """按 Terminal Full Name 分组，路由到对应 Provider。"""
         hutchison_records, other_records = partition(
             records,
-            lambda r: (r.get("Terminal Full Name") or "").strip().upper() == _HUTCHISON_TERMINAL,
+            lambda r: extract_select_text(r.get("Terminal Full Name")).strip().upper() == _HUTCHISON_TERMINAL,
         )
 
         result: list[ClearData] = []

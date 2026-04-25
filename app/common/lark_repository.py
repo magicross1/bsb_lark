@@ -38,9 +38,9 @@ class BaseRepository(ABC):
         raw = r.fields or {}
         normalized: dict[str, Any] = {"record_id": r.record_id}
         for k, v in raw.items():
-            if isinstance(v, (list, dict)):
-                # 复合类型：尝试提取可读文本
-                # 若为 None（关联/附件字段），保留原始值供上层专用工具处理
+            if isinstance(v, list) and all(isinstance(item, str) for item in v):
+                normalized[k] = v
+            elif isinstance(v, (list, dict)):
                 text = extract_cell_text(v)
                 normalized[k] = text if text is not None else v
             else:

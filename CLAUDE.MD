@@ -1,3 +1,154 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Language
+
+- 使用中文回复，代码注释也使用中文
+- `from __future__ import annotations` in every file
+
+## Development Commands
+
+```bash
+uv sync                                                # 安装依赖
+uv run uvicorn app.main:app --reload --port 3000       # 启动开发服务器 (http://localhost:3000/docs)
+uv run ruff check .                                    # lint
+uv run ruff format .                                   # 格式化
+uv run mypy app/                                       # 类型检查 (strict mode)
+uv run pytest                                          # 运行测试 (asyncio_mode=auto)
+uv run pytest tests/test_vessel_sync.py                # 运行单个测试
+uv run python tests/test_cartage_parse.py              # 运行手动测试脚本
+```
+
+Ruff: line-length=120, rules E/F/I/N/UP/B. `parser.py`/`prompts.py` 允许 E501, `router.py` 允许 B008.
+
+## Project Overview
+
+BSB Transport Australia 的物流运营后端。数据存储在 Lark Bitable (37 张表), 通过 `lark-oapi` SDK 读写。AI 解析用智谱 ZhipuAI (`glm-5v-turbo`), 用于从 PDF/图片自动提取物流单据数据。
+
+**核心业务域**:
+- **Cartage** — 从 Cartage Advise 附件自动提取数据 → 地址匹配 → 写回 Bitable (进口 1:1 Op-Import, 出口按 Release Qty 展开多条)
+- **EDO** — 从 Empty Delivery Order PDF 提取 container_number/edo_pin/shipping_line/empty_park
+- **Sync** — 爬虫定时同步码头数据 (Vessel Schedule/Container Status/Clear Status/VBS 5 个码头)
+- **Master Data** — 9 个主数据表的 CRUD 端点
+
+## Architecture — Big Picture
+
+分层架构，唯一允许的主链路：`main` → `controller` → `service` → `repository/cache`
+
+基础能力层 (`config`/`core`/`common`/`entity`) 可被各层使用，但不能反向接管业务流程。
+
+**LLM 链路**: `controller` → `LLM application service` → `parser / enrichment / domain service` → `repository/cache`
+
+**Sync 链路**: `controller` → `SyncTemplate 子类` (模板方法三步: fetch_records → fetch_provider_data → build_update_wrappers → _persist)
+
+### Key Infrastructure (跨多文件才能理解的模式)
+
+**BaseRepository + QueryWrapper + UpdateWrapper** (`common/lark_repository.py`, `common/query_wrapper.py`, `common/update_wrapper.py`):
+所有 Bitable 数据访问的统一抽象。Repository 子类只需设 `table_id`。查询和更新全部用链式构建器，禁止手动拼 filter dict。`record_id` 查询自动路由到直连 API 而非 search API。
+
+**Bitable 表注册** (`common/lark_tables.py`):
+37 张表的 table_id 和 field_id 集中管理为 `TableDef`。新增表必须在这里注册。
+
+**SyncTemplate 模板方法** (`service/sync/workflow/sync_template.py` + `service/sync/workflow/sync_data.py`):
+所有爬虫同步共用的三步骨架。场景实现在 `service/sync/scene/{module}/`，查询条件常量在 `service/sync/constants/{module}_constants.py`。`SyncData` 子类用 Pydantic `alias` 声明 Python 字段名 → 飞书列名映射，`to_update_wrapper()` 自动转换。
+
+**BaseParser** (`core/base_parser.py`):
+AI 解析的基类。处理 PDF→图片转换、base64 编码、调用智谱 API、JSON 提取。子类只需定义 prompt 和结果转换。
+
+**RelationLoader** (`common/relation_loader.py`):
+批量关联字段解析，消除 N+1 查询。声明式 `RelationConfig` 定义关联关系。
+
+**LinkResolver** (`service/sync/utils/link_resolver.py`):
+Sync 场景中关联字段 → record_id 的解析。配合 `LinkConfig` 使用。
+
+## Code Standards
+
+### Naming
+- Files: `snake_case.py`
+- Classes: `PascalCase`
+- Functions/Methods: `snake_case`; Repository 层例外用 `camelCase` (`findOne`, `createOne`, `updateOne`, `deleteOne`)
+- Constants: `UPPER_SNAKE_CASE`; 私有常量 `_UPPER_SNAKE_CASE`
+
+### Bitable 写回类型要求
+- datetime 字段 → `int` 毫秒时间戳 `int(dt.timestamp() * 1000)`
+- number 字段 → `float()`
+- `field_names` 参数必须用 `json.dumps()` 而非 `str()`
+
+### 公共工具 — 必须优先使用，禁止重复实现
+
+```python
+# 查询 — QueryWrapper
+records = await repo.list(QueryWrapper().not_empty("Terminal").order_by("ETA"))
+record = await repo.findOne(QueryWrapper().eq("Container Number", "ABCD1234567"))
+
+# 更新 — UpdateWrapper
+await repo.updateOne(
+    UpdateWrapper().eq("record_id", rid).set("Status", "Done").set("Tag", "OK")
+)
+
+# 批量更新
+await repo.batch_update([
+    UpdateWrapper().eq("record_id", r.record_id).set_all(fields).with_label(r.cn)
+    for r in data_list
+])
+
+# 按 record_id 查 — 走直连 API，不走 search
+record = await repo.findOne(QueryWrapper().eq("record_id", rid))
+records = await repo.list(QueryWrapper().in_list("record_id", ids))
+
+# 集合操作 — collection_utils
+from app.common.collection_utils import pluck, to_map, filter_by, group_by, partition
+cns = pluck(records, "Container Number")
+cn_to_rid = to_map(records, "Container Number")
+
+# 断言 — assert_utils
+from app.common.assert_utils import assert_in, assert_not_blank, assert_not_none
+
+# 时间戳 — safe_ts
+from app.service.sync.utils.datetime_parser import safe_ts
+eta = safe_ts(raw, "ETA")
+```
+
+### QueryWrapper 特殊语法
+- `.any_empty(fields)` — 任一字段为空 → `OR(f1="", f2="", ...)`
+- `.not_in_or_empty(field, values)` — 字段为空或不在列表中
+- `.client_filter(predicate)` — 纯客户端筛选 (如 `ETA < now()`)
+- Bitable **不支持 `NOT`** — 为空用 `=""`，非空用 `!=""`
+
+## Sync Module Conventions
+
+新增 Sync 场景时的文件结构模板：
+
+```
+service/sync/scene/{module}/
+  {module}_sync.py                    # SyncTemplate 子类
+  {module}_data.py                    # SyncData 子类
+service/sync/constants/
+  {module}_constants.py               # _CONDITIONS dict
+service/sync/request/
+  {module}_sync_request.py
+  {module}_batch_sync_request.py
+controller/sync/{module}.py           # GET conditions + POST sync + POST batch
+```
+
+**铁律**:
+- Repository 必须是独立文件 — 禁止方法内 `class _XxxRepo(BaseRepository)`，一表一文件放 `repository/`
+- link 字段反查用 `repo.list(in_list("record_id", ids))` + `to_map`
+- SyncData 中 datetime 字段一律 `int | None`（毫秒时间戳），用 `safe_ts()` 转换
+- 新增条件只需在 `_CONDITIONS` dict 注册，不改逻辑代码
+- constants 中 `client_filter` 处理已有数据时兼顾 `int`/`str`（Bitable 读回 datetime 为 int 毫秒时间戳）
+
+## Lark CLI
+
+```bash
+lark-cli base +base-get --base-token WXcubLU2oaJbHdsNTzCjy16Spwc
+lark-cli base +field-list --base-token WXcubLU2oaJbHdsNTzCjy16Spwc --table-id TABLE_ID
+lark-cli base +record-list --base-token WXcubLU2oaJbHdsNTzCjy16Spwc --table-id TABLE_ID
+```
+
+---
+
 # BSB Lark Architecture Rules
 
 ## 目标
@@ -6,13 +157,11 @@
 
 这是强约束，不是建议。
 
-- 使用中文回复  代码注释也使用中文
-
 - 任何新增代码都必须先判断自己属于哪一层，再放到对应目录。
 - 同级职责不允许互相调用。
 - 不允许跨层调用。
 - 不允许职责混淆。
-- 不允许为了“省一层”而绕过既定调用链。
+- 不允许为了"省一层"而绕过既定调用链。
 
 ---
 
@@ -47,7 +196,7 @@
 
 ### 对 `deps.py` 的特别说明
 
-`deps.py` 不是“随便放依赖对象的地方”。
+`deps.py` 不是"随便放依赖对象的地方"。
 
 只有在以下情况下才允许使用 `deps.py`：
 
@@ -66,7 +215,7 @@
 
 ### 对 `container.py` 的特别说明
 
-`container.py` 的意义是组合根，是“组装依赖”的地方。
+`container.py` 的意义是组合根，是"组装依赖"的地方。
 
 它存在的前提是：
 
@@ -75,7 +224,7 @@
 - 不承担业务逻辑
 - 不承担 HTTP 逻辑
 
-如果 `container.py` 只是变成一个新的“万能中转站”，或者把不相关领域强行塞在一起，就应该拆分。
+如果 `container.py` 只是变成一个新的"万能中转站"，或者把不相关领域强行塞在一起，就应该拆分。
 
 例如：
 
@@ -86,7 +235,7 @@
 
 ### 最终判定标准
 
-如果某个文件需要靠注释解释“虽然它叫这个名字，但其实它做的是另一件事”，那它的命名大概率已经错了。
+如果某个文件需要靠注释解释"虽然它叫这个名字，但其实它做的是另一件事"，那它的命名大概率已经错了。
 
 ---
 
@@ -242,7 +391,7 @@
 
 说明：
 
-- 如果确实需要“service 调 service”，只能发生在“应用服务 -> 领域服务”这个固定方向。
+- 如果确实需要"service 调 service"，只能发生在"应用服务 -> 领域服务"这个固定方向。
 - 普通同级 service 不允许互相调用。
 - 不能出现 `AService -> BService -> CService` 的横向串联。
 - 需要编排时，必须抽成明确的 facade / application service。
@@ -285,78 +434,6 @@
 
 ---
 
-## 一.五、公共工具使用规范
-
-### `app/common/` 下的工具必须优先使用，禁止在业务代码中重复实现。
-
-### Repository 层 — `BaseRepository` + `QueryWrapper` + `UpdateWrapper`
-
-所有 Bitable 数据访问必须通过 `BaseRepository` 子类，使用链式构建器：
-
-```python
-# 查询 — QueryWrapper
-records = await repo.list(QueryWrapper().not_empty("Terminal").order_by("ETA"))
-record = await repo.findOne(QueryWrapper().eq("Container Number", "ABCD1234567"))
-
-# 更新 — UpdateWrapper
-await repo.updateOne(
-    UpdateWrapper().eq("record_id", rid).set("Status", "Done").set("Tag", "OK")
-)
-
-# 批量更新
-await repo.batch_update([
-    UpdateWrapper().eq("record_id", r.record_id).set_all(fields).with_label(r.cn)
-    for r in data_list
-])
-
-# 按 record_id 查 — 走直连 API，不走 search
-record = await repo.findOne(QueryWrapper().eq("record_id", rid))
-records = await repo.list(QueryWrapper().in_list("record_id", ids))
-```
-
-**禁止**：
-- 直接传 record_id 字符串给查询/删除方法（必须用 `QueryWrapper.eq("record_id", ...)`)
-- 手动拼 filter dict（必须用 `QueryWrapper` 链式方法）
-- 在 service 中直接构造 `AppTableRecord`（由 `BaseRepository` 内部转换）
-
-### 集合操作 — `collection_utils`
-
-```python
-from app.common.collection_utils import pluck, to_map, filter_by, group_by, partition
-
-cns = pluck(records, "Container Number")           # 提取非空字段值列表
-cn_to_rid = to_map(records, "Container Number")    # 字段 → record_id 映射
-records = filter_by(all_records, "CN", cn_set)      # 按字段值集合过滤
-grouped = group_by(records, lambda r: r.get("Terminal"))  # 按函数分组
-yes, no = partition(records, lambda r: ...)          # 按谓词分两组
-```
-
-**禁止**：在业务代码中重复写 `[v for r in records if (v := r.get(field))]` 等模式。
-
-### 断言 — `assert_utils`
-
-```python
-from app.common.assert_utils import assert_in, assert_not_blank, assert_not_none
-
-query = assert_in(condition, _CONDITIONS, f"未知条件 '{condition}'")
-assert_not_blank(vessel_name, f"记录 {rid} 缺少 Vessel Name")
-assert_not_none(value, "参数不能为空")
-```
-
-**禁止**：在业务代码中重复写 `if x is None: raise ValueError(...)` 三行断言模式。
-
-### 时间戳转换 — `safe_ts`
-
-```python
-from app.service.sync.utils.datetime_parser import safe_ts
-
-eta = safe_ts(raw, "ETA")  # 从 dict 取值并转毫秒时间戳，空值返回 None
-```
-
-**禁止**：在各模块中重复定义 `_ts()` 辅助函数。
-
----
-
 ## 二、标准分层调用方向
 
 唯一允许的主链路如下：
@@ -370,7 +447,7 @@ eta = safe_ts(raw, "ETA")  # 从 dict 取值并转毫秒时间戳，空值返回
 - `common`
 - `entity`
 
-但它们只能提供“公共能力”，不能反向接管业务流程。
+但它们只能提供"公共能力"，不能反向接管业务流程。
 
 ### 允许依赖
 
@@ -451,17 +528,17 @@ controller 只保留：
 
 ### 2. Service 必须承担业务语义
 
-service 是唯一可以定义“做什么”的地方。
+service 是唯一可以定义"做什么"的地方。
 
 例如：
 
-- “解析 cartage 文档”
-- “解析后做地址富化”
-- “查询匹配所需主数据并缓存”
+- "解析 cartage 文档"
+- "解析后做地址富化"
+- "查询匹配所需主数据并缓存"
 
 这些都应属于 service，而不是 controller 或 repository。
 
-### 3. Repository 只回答“怎么取数据”
+### 3. Repository 只回答"怎么取数据"
 
 repository 不回答：
 
@@ -574,7 +651,7 @@ cache 不能变成新的业务层。
 ### Repository
 
 - 一个 repository 对应一个表或一个明确的数据来源
-- 不在 repository 中做“跨表业务拼装”
+- 不在 repository 中做"跨表业务拼装"
 - 文件名是 `repository` 就只能负责数据访问
 
 ### Cache
@@ -628,4 +705,4 @@ cache 不能变成新的业务层。
 
 宁可显式编排，也不要隐式绕行。
 
-宁可拆小职责，也不要把 controller、service、repository、cache 混成一个“能跑就行”的链路。
+宁可拆小职责，也不要把 controller、service、repository、cache 混成一个"能跑就行"的链路。

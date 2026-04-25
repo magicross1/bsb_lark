@@ -25,14 +25,16 @@ BSB 团队内部成员，需要通过程序化管理飞书多维表格数据
 简洁、可靠、高效的后端服务，注重错误处理和日志记录
 
 ## 技术约束
-- 必须使用 Lark 官方 SDK (@larksuiteoapi/node-sdk)
-- 遵守 Lark API 调用频率限制
+- Python 3.12 + FastAPI + Pydantic v2
+- 必须使用 Lark 官方 Python SDK (lark-oapi)
+- AI 解析使用智谱 ZhipuAI (glm-5v-turbo 多模态模型)
+- 遵守 Lark API 调用频率限制 (search 50次/秒)
 - 所有敏感信息通过环境变量管理
-- Node.js >= 20
+- 包管理: uv
 
 ## 参考产品/设计
 - Lark Open Platform: https://open.larksuite.com
 - Lark Bitable API: https://open.larksuite.com/document/ukTMukTMukTM/uUDN04yM1QjL2EDN
 
 ---
-*最后更新: 2026-04-10*
+*最后更新: 2026-04-25*

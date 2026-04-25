@@ -13,8 +13,11 @@ class VbsData(SyncData):
     operation: str  # VBS operation 名称，不写回
 
     estimated_arrival: int | None = Field(None, alias="EstimatedArrival")  # 毫秒时间戳
+    eta: int | None = Field(None, alias="ETA")  # = EstimatedArrival
     import_availability: int | None = Field(None, alias="ImportAvailability")  # 毫秒时间戳
+    first_free: int | None = Field(None, alias="First Free")  # = ImportAvailability
     storage_start_date: int | None = Field(None, alias="StorageStartDate")  # 毫秒时间戳
+    last_free: int | None = Field(None, alias="Last Free")  # = StorageStartDate
 
     def _metadata_fields(self) -> set[str]:
         return {"record_id", "container_number", "operation"}

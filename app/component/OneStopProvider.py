@@ -269,6 +269,20 @@ class OneStopProvider:
     # 公开接口
     # ------------------------------------------------------------------
 
+    async def _request_with_retry(self, url: str, payload: dict) -> dict | None:
+        """带 401 自动重新登录重试的 POST 请求"""
+        for attempt in range(2):
+            async with self.session.post(url, proxy=self._PROXY, headers=self._headers, json=payload) as response:
+                if response.status == 200:
+                    return await response.json()
+                if response.status == 401 and attempt == 0:
+                    logger.warning("1-Stop API 返回 401，重新登录重试: %s", url.split('?')[0].split('/')[-1])
+                    await self.login()
+                    continue
+                logger.error("1-Stop API 失败，状态码: %s, URL: %s", response.status, url.split('?')[0].split('/')[-1])
+                return None
+        return None
+
     async def get_containers_info_by_list(self, ctn_vessel_dict: dict) -> dict:
         """
         批量查询集装箱最新事件（用于 Discharged 流程）
@@ -282,12 +296,9 @@ class OneStopProvider:
         for i in range(0, len(container_list), 10):
             slice_list = container_list[i:i + 10]
             url = f'{self._BASE_URL}/services/Container/v1/Event/Search?skip-notification=true'
-            async with self.session.post(url, proxy=self._PROXY, headers=self._headers, json={"Containers": slice_list}) as response:
-                if response.status == 200:
-                    result_json = await response.json()
-                    result.update(_parse_containers_info(result_json, ctn_vessel_dict))
-                else:
-                    logger.error(f"get_containers_info 失败，箱号: {slice_list}")
+            result_json = await self._request_with_retry(url, {"Containers": slice_list})
+            if result_json:
+                result.update(_parse_containers_info(result_json, ctn_vessel_dict))
         return result
 
     async def match_containers_info_by_list(self, container_list: list[str]) -> dict:
@@ -302,12 +313,9 @@ class OneStopProvider:
         for i in range(0, len(container_list), 10):
             slice_list = container_list[i:i + 10]
             url = f'{self._BASE_URL}/services/Container/v1/Event/Search?skip-notification=true'
-            async with self.session.post(url, proxy=self._PROXY, headers=self._headers, json={"Containers": slice_list}) as response:
-                if response.status == 200:
-                    result_json = await response.json()
-                    result.update(_parse_match_containers_info(result_json))
-                else:
-                    logger.error(f"match_containers_info 失败，箱号: {slice_list}")
+            result_json = await self._request_with_retry(url, {"Containers": slice_list})
+            if result_json:
+                result.update(_parse_match_containers_info(result_json))
         return result
 
     async def customs_cargo_status_search(self, container_list: list) -> dict:
@@ -322,19 +330,13 @@ class OneStopProvider:
         for i in range(0, len(container_list), 10):
             slice_list = container_list[i:i + 10]
             url = "https://ccproxy-api.1-stop.biz/CMRGW/services/CMRImport/v1/CustomStatus/SearchBasic?skip-notification=true"
-            async with self.session.post(
-                url, proxy=self._PROXY, headers=self._headers,
-                json={"ContainerNumbers": slice_list, "SubSearch": "public"},
-            ) as response:
-                if response.status == 200:
-                    result_json = await response.json()
-                    result.update(_parse_customs_cargo_status(result_json))
-                else:
-                    logger.error(f"customs_cargo_status 失败，箱号: {slice_list}")
+            result_json = await self._request_with_retry(url, {"ContainerNumbers": slice_list, "SubSearch": "public"})
+            if result_json:
+                result.update(_parse_customs_cargo_status(result_json))
         return result
 
     async def _vessel_search_by_name(self, vessel_name, base_node):
-        """查询单个船名的班轮信息"""
+        """查询单个船名的班轮信息，401 时自动重新登录重试"""
         port_dict = {"PORT OF SYDNEY": "AUSYD", "PORT OF MELBOURNE": "AUMEL"}
         payload = {
             'PortOfCall': port_dict[base_node],
@@ -344,10 +346,7 @@ class OneStopProvider:
             'DisplayDeparted': False,
         }
         url = "https://ccproxy-api.1-stop.biz/CargoConnectGW/services/Vessel/v2/Schedule/Search?skip-notification=true"
-        async with self.session.post(url, proxy=self._PROXY, headers=self._headers, json=payload) as response:
-            if response.status == 200:
-                return await response.json()
-            return None
+        return await self._request_with_retry(url, payload)
 
     async def vessel_search_by_name_list(self, vessel_map_dict: dict, base_node: str) -> dict:
         """

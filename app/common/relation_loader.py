@@ -37,7 +37,9 @@ async def load_terminal_mapping() -> dict[str, dict[str, str]]:
         full_name = r.get("Terminal Full Name")
         depot = r.get("Depot")
         if full_name:
-            mapping[full_name] = {"Depot": depot}
+            names = full_name if isinstance(full_name, list) else [full_name]
+            for name in names:
+                mapping[name] = {"Depot": depot}
 
     _terminal_mapping_cache = mapping
     return mapping
@@ -50,23 +52,31 @@ def extract_linked_ids(field_value: object) -> list[str]:
     - str: 单个 record_id
     - list[str]: 多个 record_id
     - list[dict]: 每个 dict 含 record_ids (list) 或 record_id (str)
+    - dict: 含 link_record_ids 或 record_ids (如 {"link_record_ids": ["recXXX"]})
     """
     if field_value is None:
         return []
     if isinstance(field_value, str):
         return [field_value] if field_value else []
-    if isinstance(field_value, list):
+    if isinstance(field_value, dict):
         ids: list[str] = []
+        for key in ("link_record_ids", "record_ids"):
+            val = field_value.get(key)
+            if isinstance(val, list):
+                ids.extend(str(v) for v in val)
+        return ids
+    if isinstance(field_value, list):
+        ids2: list[str] = []
         for item in field_value:
             if isinstance(item, str):
-                ids.append(item)
+                ids2.append(item)
             elif isinstance(item, dict):
                 record_ids = item.get("record_ids")
                 if record_ids:
-                    ids.extend(record_ids)
+                    ids2.extend(record_ids)
                 elif "record_id" in item:
-                    ids.append(item["record_id"])
-        return ids
+                    ids2.append(item["record_id"])
+        return ids2
     return []
 
 

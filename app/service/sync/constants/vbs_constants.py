@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from app.common.query_wrapper import QueryWrapper as BitableQuery
 
-# VBS 同步条件
+# GATEOUT_Time 为空
 _CONDITIONS: dict[str, BitableQuery] = {
-    # pending — GATEOUT_Time 为空且 Terminal 可路由到 VBS
-    "pending": BitableQuery().is_empty("GATEOUT_Time"),
-    # all — 全部可路由到 VBS 的记录
-    "all": BitableQuery(),
+    "pending": (
+        BitableQuery().client_only()
+        .is_empty("GATEOUT_Time")
+    ),
+    "all": BitableQuery().client_only(),
 }
