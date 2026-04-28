@@ -7,6 +7,7 @@ class AppSettings(BaseSettings):
     LARK_BITABLE_APP_TOKEN: str = ""
     ZHIPUAI_API_KEY: str = ""
     AI_MODEL: str = "glm-4.6v"
+    GOOGLE_GEOCODING_API_KEY: str = ""
     PORT: int = 3000
     ENV: str = "development"
     LOG_LEVEL: str = "info"

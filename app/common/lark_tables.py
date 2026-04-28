@@ -536,5 +536,47 @@ class _Tables:
         },
     )
 
+    op_quote_input = TableDef(
+        id="tblZMwTzoRmaEDnz",
+        name="Op-Quote Input",
+        fields={
+            "deliver_address": FieldRef("fld0zL3dnq", "Deliver Address"),
+            "suburb": FieldRef("fldtIcSHW6", "Suburb"),
+            "base_node": FieldRef("fldDx1g4qE", "Base Node"),
+            "freight_forwarding": FieldRef("fldIPfXS6A", "Freight Forwarding"),
+            "md_distance_matrix": FieldRef("fldXc7cFkw", "MD-Distance Matrix"),
+            "price_level_nsw": FieldRef("fldhOrmR57", "MD-Price Level(NSW)"),
+            "price_level_vic": FieldRef("fldB7nB4kF", "MD-Price Level(VIC)"),
+            "distance": FieldRef("fldLZ2zl6R", "Distance"),
+            "toll_code": FieldRef("fldagIAX3N", "Toll Code"),
+            "fuel_rate": FieldRef("fldg6GDg4s", "Fuel Rate"),
+            "dg_rate": FieldRef("fldzDs9CCw", "DG Rate"),
+            "rural_tailgate": FieldRef("fldC0rspXr", "Rural Tailgate"),
+            "specific": FieldRef("fldp4DSQXP", "Specific"),
+            "std_20": FieldRef("fld9vINrfg", "20 STD"),
+            "std_40": FieldRef("fldx3mapvE", "40 STD"),
+            "sdl_20": FieldRef("fldEPODYen", "20 SDL"),
+            "sdl_40": FieldRef("fldtzqdYdi", "40 SDL"),
+            "drop_20": FieldRef("fld3BrHnXb", "20 DROP"),
+            "drop_40": FieldRef("fldo5ZtLZl", "40 DROP"),
+        },
+    )
+
+    op_quote_output = TableDef(
+        id="tblaDNKeOOOayY9h",
+        name="Op-Quote Output",
+        fields={
+            "fee_name": FieldRef("fldZ5H9ITP", "Fee Name"),
+            "amount": FieldRef("fldbDay72I", "Amount"),
+            "container_size": FieldRef("flddecqAio", "Container Size"),
+            "deliver_type": FieldRef("fldAPcLqai", "Deliver Type"),
+            "index": FieldRef("fldaIvKZdB", "Index"),
+            "unit": FieldRef("fld0ocBHVx", "Unit"),
+            "remark": FieldRef("fldkYdbUPE", "Remark"),
+            "quote_type": FieldRef("fldQ1uP9kb", "Quote Type"),
+            "csdt": FieldRef("fldPeg0Lxq", "Container Size & Deliver Type"),
+        },
+    )
+
 
 T = _Tables()
